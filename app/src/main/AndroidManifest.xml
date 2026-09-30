@@ -84,6 +84,20 @@
             android:label="@string/app_history"
             android:exported="false" />
 
+        <!-- 脚本模式：列表 + 编辑 -->
+        <activity
+            android:name=".ScriptActivity"
+            android:label="@string/script_title"
+            android:parentActivityName=".MainActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ScriptEditActivity"
+            android:label="@string/script_edit_title"
+            android:parentActivityName=".ScriptActivity"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="false" />
+
     </application>
 
 </manifest>

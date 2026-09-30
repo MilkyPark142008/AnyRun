@@ -1,0 +1,450 @@
+package com.zcshou.script;
+
+import java.util.List;
+
+/**
+ * 脚本播放引擎：按时间推进，在路点之间做经纬度插值。
+ *
+ * <p>播放本身不关心线程，由 {@link com.zcshou.service.ServiceGo} 的定位线程周期性调用
+ * {@link #onTick()} 推进即可。每个 {@link ScriptWaypoint} 自带移动状态（走 / 跑 / 骑）和速度，
+ * 因此“同一段脚本里既能走路又能骑车”是靠分段速度实现的：切线方向不变，速度随当前段的状态变化。</p>
+ *
+ * <p>start / stop 可能在主线程调用，而 onTick 在定位线程调用，所以这几个入口都做成同步方法，
+ * 回调也统一由引擎自己加锁，避免“停止播放”和“推进位置”交叉执行。</p>
+ */
+public class ScriptPlayer {
+    /** 地球平均半径（米） */
+    public static final double EARTH_RADIUS = 6371008.8D;
+
+    /** 上一次位置与本次位置小于该距离时，认为没有移动（用于避免重复注入相同坐标） */
+    private static final double MOVE_EPSILON_METERS = 0.05D;
+    /** 计算下一位置时允许的最小推进距离，避免除零 */
+    private static final double MIN_STEP_METERS = 0.01D;
+
+    private ScriptRoute mRoute;
+    private boolean mPlaying;
+    private boolean mEndReached;
+
+    /** 开始播放的时刻（毫秒，用来把等待时间和移动时间统一成一条时间轴） */
+    private long mStartRealtime;
+    /**
+     * 当前路段在开始播放之前已经走过的“移动时间”（秒）。
+     * 只有“从当前位置中途接入脚本”时不为 0，用来避免位置瞬移。
+     */
+    private double mSegmentOffset;
+    /** 当前正在走的路段：从 mIndex 到 mIndex + 1 */
+    private int mIndex;
+    /** 是否循环 */
+    private boolean mLoop;
+    /** 循环模式下已经跑完的圈数，仅用于日志 */
+    private int mLap;
+    /** 是否已经产生过有效位置（用于首次强制回调一次） */
+    private boolean mHasPosition;
+
+    private double mLng;
+    private double mLat;
+    private ScriptWaypoint.Mode mMode = ScriptWaypoint.Mode.WALK;
+    private double mSpeed;
+    private double mBearing;
+    private double mAltitude;
+
+    private Handler mHandler;
+
+    /** 播放过程中的回调，实现方需要保证线程安全（默认在 ServiceGo 的定位线程里回调） */
+    public interface Handler {
+        /** 开始播放，参数为第一个路点的位置 */
+        void onScriptStart(ScriptRoute route, double lng, double lat, double alt);
+
+        /** 位置推进（每一步都保证确实移动了） */
+        void onScriptPosition(double lng, double lat, double alt, ScriptWaypoint.Mode mode, double speed, double bearing);
+
+        /** 进入某一段（该段起点的状态），可以用来提示“开始骑行” */
+        void onScriptSegment(ScriptRoute route, int index, ScriptWaypoint.Mode mode, double speed);
+
+        /** 单次模式跑到终点 */
+        void onScriptFinish(ScriptRoute route);
+
+        /** 异常停止（脚本无效等） */
+        void onScriptError(String message);
+    }
+
+    public void setHandler(Handler handler) {
+        mHandler = handler;
+    }
+
+    public synchronized boolean isPlaying() {
+        return mPlaying && mRoute != null;
+    }
+
+    public ScriptRoute getRoute() {
+        return mRoute;
+    }
+
+    public ScriptWaypoint.Mode getMode() {
+        return mMode;
+    }
+
+    public double getSpeed() {
+        return mSpeed;
+    }
+
+    public double getBearing() {
+        return mBearing;
+    }
+
+    public double getLng() {
+        return mLng;
+    }
+
+    public double getLat() {
+        return mLat;
+    }
+
+    public int getLap() {
+        return mLap;
+    }
+
+    /**
+     * 开始播放。
+     *
+     * @param route       已经被解析好的路线（路点至少一个）
+     * @param fromLng     模拟位置当前所在经度，用于把脚本对齐到最近的轨迹点
+     * @param fromLat     模拟位置当前所在纬度
+     */
+    public synchronized void start(ScriptRoute route, double fromLng, double fromLat) {
+        if (route == null || route.points == null || route.points.isEmpty()) {
+            notifyError("脚本没有可用的路点");
+            return;
+        }
+
+        mRoute = route;
+        mLoop = route.isLoop();
+        mLap = 0;
+        mEndReached = false;
+        mHasPosition = false;
+
+        List<ScriptWaypoint> points = route.points;
+
+        // 只有一个点：原地保持该状态（不会移动，但速度 / 方向按该点设置）
+        if (points.size() == 1) {
+            mIndex = 0;
+            mSegmentOffset = 0;
+            mLng = points.get(0).lng;
+            mLat = points.get(0).lat;
+            mAltitude = points.get(0).alt;
+            mMode = points.get(0).mode;
+            mSpeed = points.get(0).speed;
+            mBearing = 0;
+            mStartRealtime = System.currentTimeMillis();
+            mPlaying = true;
+
+            if (mHandler != null) {
+                mHandler.onScriptStart(route, mLng, mLat, mAltitude);
+                mHandler.onScriptSegment(route, 0, mMode, mSpeed);
+            }
+            return;
+        }
+
+        Anchor anchor = findAnchor(points, fromLng, fromLat);
+
+        mIndex = anchor.index;
+        mSegmentOffset = anchor.offsetSeconds;
+
+        ScriptWaypoint current = points.get(mIndex);
+        mLng = current.lng;
+        mLat = current.lat;
+        mAltitude = current.alt;
+        mMode = current.mode;
+        mSpeed = current.speed;
+        mBearing = ScriptParser.bearing(current, points.get(mIndex + 1));
+
+        mStartRealtime = System.currentTimeMillis();
+        mPlaying = true;
+
+        if (mHandler != null) {
+            mHandler.onScriptStart(route, mLng, mLat, mAltitude);
+            mHandler.onScriptSegment(route, mIndex, mMode, mSpeed);
+        }
+
+        // 立即推进一次，避免第一次 tick 之前位置没变化
+        onTick();
+    }
+
+    /** 停止播放（保留当前位置，不再推进） */
+    public synchronized void stop() {
+        mPlaying = false;
+        mEndReached = false;
+        mRoute = null;
+    }
+
+    /**
+     * 周期调用：按“开始播放到现在”的时间推进位置。
+     *
+     * <p>用时间轴而不是累加距离，可以让每段的移动速度严格等于该段状态的速度
+     * （包括停留时间，也不需要额外计时器）。</p>
+     */
+    public synchronized boolean onTick() {
+        if (!mPlaying || mRoute == null || mEndReached) {
+            return false;
+        }
+
+        List<ScriptWaypoint> points = mRoute.points;
+        if (points == null || points.isEmpty()) {
+            return false;
+        }
+
+        // 单点脚本：位置不动，只有速度 / 方向需要维持
+        if (points.size() == 1) {
+            ScriptWaypoint only = points.get(0);
+            return updatePosition(only.lng, only.lat, only.alt, only.mode, only.speed, mBearing, false);
+        }
+
+        double elapsed = (System.currentTimeMillis() - mStartRealtime) / 1000.0;
+        if (elapsed < 0) {
+            elapsed = 0;
+        }
+
+        double remainingTime = elapsed;
+        int guard = 0;
+
+        // 每轮循环里的 remainingTime 都表示“从当前路段起点算起经过的秒数”：
+        // 第一轮要把接入脚本时已经走过的偏移扣掉，之后每跨过一段都会重置为剩余的净时间。
+        while (guard++ < 100000) {
+            remainingTime -= mSegmentOffset;
+            mSegmentOffset = 0;
+            if (remainingTime < 0) {
+                remainingTime = 0;
+            }
+
+            int next = mIndex + 1;
+
+            if (next >= points.size()) {
+                // 已经到了最后一个点
+                if (!mLoop) {
+                    ScriptWaypoint last = points.get(points.size() - 1);
+                    mEndReached = true;
+                    updatePosition(last.lng, last.lat, last.alt, last.mode, speedOf(last), mBearing, true);
+
+                    if (mHandler != null) {
+                        mHandler.onScriptFinish(mRoute);
+                    }
+                    return true;
+                }
+
+                // 循环模式：补上“最后一点回到第一点”的闭合段
+                ScriptWaypoint last = points.get(mIndex);
+                ScriptWaypoint first = points.get(0);
+                double closing = ScriptParser.distance(last, first);
+                double closingSpeed = speedOf(first);
+
+                if (closing < MIN_STEP_METERS) {
+                    mLap++;
+                    mIndex = 0;
+                    mBearing = points.size() > 1 ? ScriptParser.bearing(first, points.get(1)) : 0;
+                    if (mHandler != null) {
+                        mHandler.onScriptSegment(mRoute, 0, first.mode, speedOf(first));
+                    }
+                    continue;
+                }
+
+                double closingTravel = closing / closingSpeed;
+                if (remainingTime < closingTravel + waitOf(first)) {
+                    double traveled = Math.max(0, Math.min(closingTravel, remainingTime - waitOf(first)));
+                    double distance = Math.max(0, Math.min(closing, closingSpeed * traveled));
+                    double bearing = ScriptParser.bearing(last, first);
+                    double[] position = destination(last.lat, last.lng, bearing, distance);
+                    return updatePosition(position[0], position[1], last.alt, last.mode, closingSpeed, bearing, true);
+                }
+
+                remainingTime -= closingTravel + waitOf(first);
+                mLap++;
+                mIndex = 0;
+                mBearing = points.size() > 1 ? ScriptParser.bearing(first, points.get(1)) : 0;
+                if (mHandler != null) {
+                    mHandler.onScriptSegment(mRoute, 0, first.mode, speedOf(first));
+                }
+                continue;
+            }
+
+            ScriptWaypoint from = points.get(mIndex);
+            ScriptWaypoint to = points.get(next);
+            double segment = ScriptParser.distance(from, to);
+
+            // 位置重合的相邻点：直接跨过去
+            if (segment < MIN_STEP_METERS) {
+                mIndex = next;
+                mBearing = next + 1 < points.size()
+                        ? ScriptParser.bearing(to, points.get(next + 1))
+                        : ScriptParser.bearing(to, mLoop ? points.get(0) : to);
+                if (mHandler != null) {
+                    mHandler.onScriptSegment(mRoute, mIndex, to.mode, speedOf(to));
+                }
+                continue;
+            }
+
+            // 本段用的是起点（上一站）的状态：走 / 跑 / 骑就体现在这里的速度上
+            double speed = speedOf(from);
+            double travel = segment / speed;
+
+            if (remainingTime < travel + waitOf(to)) {
+                double traveled = Math.max(0, Math.min(travel, remainingTime - waitOf(to)));
+                double distance = Math.max(0, Math.min(segment, speed * traveled));
+                double bearing = ScriptParser.bearing(from, to);
+                double[] position = destination(from.lat, from.lng, bearing, distance);
+                return updatePosition(position[0], position[1], from.alt, from.mode, speed, bearing, true);
+            }
+
+            // 这一段（含到站停留）已经走完，进入下一站
+            remainingTime -= travel + waitOf(to);
+            mIndex = next;
+            mBearing = next + 1 < points.size()
+                    ? ScriptParser.bearing(to, points.get(next + 1))
+                    : ScriptParser.bearing(to, mLoop ? points.get(0) : to);
+
+            if (mHandler != null) {
+                mHandler.onScriptSegment(mRoute, mIndex, to.mode, speedOf(to));
+            }
+        }
+
+        return false;
+    }
+
+    /** 已跑完的整圈数（仅循环模式有意义） */
+    public int getLaps() {
+        return mLap;
+    }
+
+    /**
+     * 更新位置，位置确实变化时回调。
+     *
+     * @param force 强制回调（例如到达终点时，即使坐标没变也要刷新一次速度 / 方向）
+     * @return 是否产生了回调
+     */
+    private boolean updatePosition(double lng, double lat, double alt, ScriptWaypoint.Mode mode,
+                                   double speed, double bearing, boolean force) {
+        boolean moved = force || !mHasPosition
+                || distanceMeters(mLng, mLat, lng, lat) > MOVE_EPSILON_METERS;
+
+        mLng = lng;
+        mLat = lat;
+        mAltitude = alt > 0 ? alt : mAltitude;
+        mMode = mode == null ? ScriptWaypoint.Mode.WALK : mode;
+        mSpeed = speed;
+        mBearing = (bearing + 360.0) % 360.0;
+
+        if (moved) {
+            mHasPosition = true;
+            if (mHandler != null) {
+                mHandler.onScriptPosition(mLng, mLat, mAltitude, mMode, mSpeed, mBearing);
+            }
+        }
+
+        return moved;
+    }
+
+    private void notifyError(String message) {
+        mPlaying = false;
+        if (mHandler != null) {
+            mHandler.onScriptError(message);
+        }
+    }
+
+    /** 速度非法时回退到一个安全值，避免除零 */
+    private static double speedOf(ScriptWaypoint point) {
+        if (point == null) {
+            return 1.2D;
+        }
+        return point.speed > 0 ? point.speed : 1.2D;
+    }
+
+    private static int waitOf(ScriptWaypoint point) {
+        return point == null ? 0 : Math.max(0, point.waitSeconds);
+    }
+
+    /** 起点锚点：脚本从轨迹上的哪一段、已经走了多远（换算成时间）开始 */
+    private static class Anchor {
+        int index;
+        /** 在本段上已经走过的移动时间（秒） */
+        double offsetSeconds;
+    }
+
+    /**
+     * 把脚本对齐到离当前位置最近的轨迹点：找到投影最近的线段，并算出已经走过的比例。
+     * 这样“人已经在路上”时启动脚本不会出现瞬移。
+     */
+    private static Anchor findAnchor(List<ScriptWaypoint> points, double lng, double lat) {
+        Anchor anchor = new Anchor();
+        anchor.index = 0;
+        anchor.offsetSeconds = 0;
+
+        int segmentCount = points.size() - 1;
+        double best = Double.MAX_VALUE;
+
+        for (int i = 0; i < segmentCount; i++) {
+            ScriptWaypoint from = points.get(i);
+            ScriptWaypoint to = points.get(i + 1);
+            double scale = Math.cos(Math.toRadians(lat));
+            double ax = (to.lng - from.lng) * scale;
+            double ay = to.lat - from.lat;
+            double px = (lng - from.lng) * scale;
+            double py = lat - from.lat;
+
+            double lengthSquared = ax * ax + ay * ay;
+            double t = 0;
+            if (lengthSquared > 0) {
+                t = (px * ax + py * ay) / lengthSquared;
+                t = Math.max(0.0, Math.min(1.0, t));
+            }
+
+            double dx = px - ax * t;
+            double dy = py - ay * t;
+            double distance = Math.sqrt((dx * 111320.0) * (dx * 111320.0) + (dy * 111320.0) * (dy * 111320.0));
+
+            if (distance < best) {
+                best = distance;
+                anchor.index = i;
+                anchor.offsetSeconds = t * ScriptParser.distance(from, to) / speedOf(from);
+            }
+        }
+
+        return anchor;
+    }
+
+    /**
+     * 已知起点、方位角和距离，求目的点（球面公式）。
+     *
+     * @return {经度, 纬度}
+     */
+    public static double[] destination(double lat, double lng, double bearingDegrees, double distanceMeters) {
+        double angular = distanceMeters / EARTH_RADIUS;
+        double bearing = Math.toRadians(bearingDegrees);
+        double lat1 = Math.toRadians(lat);
+        double lng1 = Math.toRadians(lng);
+
+        double sinLat2 = Math.sin(lat1) * Math.cos(angular) + Math.cos(lat1) * Math.sin(angular) * Math.cos(bearing);
+        double lat2 = Math.asin(Math.max(-1.0, Math.min(1.0, sinLat2)));
+
+        double lng2 = lng1 + Math.atan2(Math.sin(bearing) * Math.sin(angular) * Math.cos(lat1),
+                Math.cos(angular) - Math.sin(lat1) * Math.sin(lat2));
+
+        // 经度归一化到 -180 ~ 180
+        double lngDegrees = Math.toDegrees(lng2);
+        lngDegrees = (lngDegrees + 540.0) % 360.0 - 180.0;
+
+        return new double[] {lngDegrees, Math.toDegrees(lat2)};
+    }
+
+    /** 两点之间的距离（米，Haversine） */
+    public static double distanceMeters(double lng1, double lat1, double lng2, double lat2) {
+        double radLng1 = Math.toRadians(lng1);
+        double radLat1 = Math.toRadians(lat1);
+        double radLng2 = Math.toRadians(lng2);
+        double radLat2 = Math.toRadians(lat2);
+
+        double sinLat = Math.sin((radLat2 - radLat1) / 2.0);
+        double sinLng = Math.sin((radLng2 - radLng1) / 2.0);
+        double h = sinLat * sinLat + Math.cos(radLat1) * Math.cos(radLat2) * sinLng * sinLng;
+
+        return 2.0 * EARTH_RADIUS * Math.asin(Math.min(1.0, Math.sqrt(h)));
+    }
+}

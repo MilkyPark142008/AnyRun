@@ -84,6 +84,7 @@ import java.util.Map;
 import com.zcshou.service.ServiceGo;
 import com.zcshou.database.DataBaseHistoryLocation;
 import com.zcshou.database.DataBaseHistorySearch;
+import com.zcshou.script.ScriptStore;
 import com.zcshou.utils.ShareUtils;
 import com.zcshou.utils.GoUtils;
 import com.zcshou.utils.MapUtils;
@@ -109,6 +110,9 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     public static final String POI_ADDRESS = "POI_ADDRESS";
     public static final String POI_LONGITUDE = "POI_LONGITUDE";
     public static final String POI_LATITUDE = "POI_LATITUDE";
+
+    /** 启动脚本模式时传给 ServiceGo 的脚本 id */
+    public static final String SCRIPT_ROUTE_ID = "SCRIPT_ROUTE_ID";
 
     private OkHttpClient mOkHttpClient;
     private SharedPreferences sharedPreferences;
@@ -149,8 +153,14 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     private boolean isFirstLoc = true; // 是否首次定位
     private boolean isMockServStart = false;
     private ServiceGo.ServiceGoBinder mServiceBinder;
+    /** 是否已经绑定过 ServiceGo（与 isMockServStart 分开记，退出时要保证解绑） */
+    private boolean mBoundToService = false;
     private ServiceConnection mConnection;
     private FloatingActionButton mButtonStart;
+    /** 脚本模式入口按钮 */
+    private FloatingActionButton mButtonScript;
+    /** 当前正在播放的脚本 id，null 表示没有在播放脚本（由定位线程回调更新） */
+    private volatile String mRunningScriptId;
     /*============================== 历史记录 相关 ==============================*/
     private SQLiteDatabase mLocationHistoryDB;
     private SQLiteDatabase mSearchHistoryDB;
@@ -200,6 +210,9 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             @Override
             public void onServiceConnected(ComponentName name, IBinder service) {
                 mServiceBinder = (ServiceGo.ServiceGoBinder)service;
+                // 脚本播放状态变化时刷新入口按钮（脚本播放可能在脚本模式页面里启动）
+                mServiceBinder.setScriptListener(mScriptListener);
+                updateScriptButton();
             }
 
             @Override
@@ -239,6 +252,14 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         if (mSensorManager != null && mSensorMagnetic != null) {
             mSensorManager.registerListener(this, mSensorMagnetic, SensorManager.SENSOR_DELAY_UI);
         }
+
+        // 回到主界面时同步一次脚本播放状态（脚本可能是在脚本模式页面里启动的）
+        String running = new ScriptStore(this).getRunningScriptId();
+        if (running != null) {
+            mRunningScriptId = running;
+        }
+        updateScriptButton();
+
         super.onResume();
     }
 
@@ -256,12 +277,15 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
         if (isMockServStart) {
             try {
-                unbindService(mConnection); // 解绑服务，服务要记得解绑，不要造成内存泄漏
+                unbindServiceIfNeeded();
                 Intent serviceGoIntent = new Intent(MainActivity.this, ServiceGo.class);
                 stopService(serviceGoIntent);
             } catch (Exception e) {
                 XLog.e("ERROR: stop ServiceGo");
             }
+            isMockServStart = false;
+        } else {
+            unbindServiceIfNeeded();
         }
 
         try {
@@ -450,6 +474,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
             if (id == R.id.nav_history) {
                 Intent intent = new Intent(MainActivity.this, HistoryActivity.class);
+
+                startActivity(intent);
+            } else if (id == R.id.nav_script) {
+                Intent intent = new Intent(MainActivity.this, ScriptActivity.class);
 
                 startActivity(intent);
             } else if (id == R.id.nav_settings) {
@@ -726,60 +754,79 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         jumpPosBtn.setOnClickListener(v -> showJumpDialog());
 
         ImageButton inputPosBtn = this.findViewById(R.id.input_pos);
-        inputPosBtn.setOnClickListener(v -> {
-            AlertDialog dialog;
-            AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
-            builder.setTitle("请输入经度和纬度");
-            View view = LayoutInflater.from(MainActivity.this).inflate(R.layout.location_input, null);
-            builder.setView(view);
-            dialog = builder.show();
+        inputPosBtn.setOnClickListener(v -> showInputPositionDialog());
+    }
 
-            EditText dialog_lng = view.findViewById(R.id.joystick_longitude);
-            EditText dialog_lat = view.findViewById(R.id.joystick_latitude);
-            RadioButton rbBD = view.findViewById(R.id.pos_type_bd);
+    /**
+     * 手动输入经纬度定位。
+     *
+     * <p>原实现把“经度”“纬度”拆成两个输入框，但布局里只有第一个框有 id、第二个框拿不到，
+     * 也没有提供粘贴整串坐标的入口，实际用起来经常出现“输入了但没定位”。现在改为
+     * 单个输入框 + 自动识别（{@link MapUtils#parseLngLat}），并保留坐标系选择。</p>
+     */
+    private void showInputPositionDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+        builder.setTitle(R.string.input_button);
+        View view = LayoutInflater.from(MainActivity.this).inflate(R.layout.location_input, null);
+        builder.setView(view);
 
-            Button btnGo = view.findViewById(R.id.input_position_ok);
-            btnGo.setOnClickListener(v2 -> {
-                String dialog_lng_str = dialog_lng.getText().toString();
-                String dialog_lat_str = dialog_lat.getText().toString();
+        final AlertDialog dialog = builder.show();
 
-                if (TextUtils.isEmpty(dialog_lng_str) || TextUtils.isEmpty(dialog_lat_str)) {
-                    GoUtils.DisplayToast(MainActivity.this,getResources().getString(R.string.app_error_input));
-                } else {
-                    double dialog_lng_double = Double.parseDouble(dialog_lng_str);
-                    double dialog_lat_double = Double.parseDouble(dialog_lat_str);
+        EditText input = view.findViewById(R.id.input_position_text);
+        RadioButton rbGps = view.findViewById(R.id.pos_type_gps);
+        Button btnPaste = view.findViewById(R.id.input_position_paste);
 
-                    if (dialog_lng_double > 180.0 || dialog_lng_double < -180.0) {
-                        GoUtils.DisplayToast(MainActivity.this,  getResources().getString(R.string.app_error_longitude));
-                    } else {
-                        if (dialog_lat_double > 90.0 || dialog_lat_double < -90.0) {
-                            GoUtils.DisplayToast(MainActivity.this,  getResources().getString(R.string.app_error_latitude));
-                        } else {
-                            if (rbBD.isChecked()) {
-                                mMarkLatLngMap = new GeoPoint(dialog_lat_double, dialog_lng_double);
-                            } else {
-                                //【修复】原代码把 WGS-84 的经度/纬度作为参数传反了，
-                                // MapUtils.wgs2bd09 的签名是 (lng, lat)
-                                double[] bdLonLat = MapUtils.wgs2bd09(dialog_lng_double, dialog_lat_double);
-                                mMarkLatLngMap = new GeoPoint(bdLonLat[1], bdLonLat[0]);
-                            }
-                            mMarkName = "手动输入的坐标";
+        // 剪贴板里如果有经纬度，直接填好，省去手动粘贴
+        String clipboard = getClipboardText();
+        if (MapUtils.parseLngLat(clipboard) != null) {
+            input.setText(clipboard);
+            input.setSelection(input.getText().length());
+        }
 
-                            markMap();
-
-                            // 绘制时再转成 WGS-84
-                            mMapView.getController().setCenter(
-                                    bd09ToWgs84(mMarkLatLngMap.getLongitude(), mMarkLatLngMap.getLatitude()));
-
-                            dialog.dismiss();
-                        }
-                    }
-                }
-            });
-
-            Button btnCancel = view.findViewById(R.id.input_position_cancel);
-            btnCancel.setOnClickListener(v1 -> dialog.dismiss());
+        btnPaste.setOnClickListener(v -> {
+            String text = getClipboardText();
+            if (TextUtils.isEmpty(text)) {
+                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.jump_position_clip_empty));
+                return;
+            }
+            input.setText(text);
+            input.setSelection(input.getText().length());
         });
+
+        Button btnGo = view.findViewById(R.id.input_position_ok);
+        btnGo.setOnClickListener(v2 -> {
+            String text = input.getText().toString().trim();
+            if (TextUtils.isEmpty(text)) {
+                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.input_position_empty));
+                return;
+            }
+
+            double[] lngLat = MapUtils.parseLngLat(text);
+            if (lngLat == null) {
+                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.app_error_input));
+                return;
+            }
+
+            if (rbGps.isChecked()) {
+                // GPS 坐标系（WGS-84）：内部仍按 BD-09 保存，绘制时再转回来
+                double[] bd09 = MapUtils.wgs2bd09(lngLat[0], lngLat[1]);
+                mMarkLatLngMap = new GeoPoint(bd09[1], bd09[0]);
+            } else {
+                mMarkLatLngMap = new GeoPoint(lngLat[1], lngLat[0]);
+            }
+
+            mMarkName = getResources().getString(R.string.input_button);
+            markMap();
+            mMapView.getController().setZoom(18.0);
+            mMapView.getController().setCenter(
+                    bd09ToWgs84(mMarkLatLngMap.getLongitude(), mMarkLatLngMap.getLatitude()));
+
+            dialog.dismiss();
+            GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.input_position_ok_toast));
+        });
+
+        Button btnCancel = view.findViewById(R.id.input_position_cancel);
+        btnCancel.setOnClickListener(v1 -> dialog.dismiss());
     }
 
     /*============================== 跳转经纬度 / 地址 ==============================*/
@@ -1040,6 +1087,80 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     private void initGoBtn() {
         mButtonStart = findViewById(R.id.faBtnStart);
         mButtonStart.setOnClickListener(this::doGoLocation);
+
+        mButtonScript = findViewById(R.id.faBtnScript);
+        if (mButtonScript != null) {
+            mButtonScript.setOnClickListener(this::doScriptLocation);
+        }
+    }
+
+    /** 脚本播放状态回调（可能在定位线程触发，刷新界面要切回主线程） */
+    private final ServiceGo.ScriptListener mScriptListener = new ServiceGo.ScriptListener() {
+        @Override
+        public void onScriptSegment(com.zcshou.script.ScriptRoute route, int index,
+                                    com.zcshou.script.ScriptWaypoint.Mode mode, double speed) {
+            mRunningScriptId = route == null ? null : route.id;
+            runOnUiThread(MainActivity.this::updateScriptButton);
+        }
+
+        @Override
+        public void onScriptFinish(com.zcshou.script.ScriptRoute route) {
+            mRunningScriptId = route == null ? null : route.id;
+            runOnUiThread(() -> {
+                updateScriptButton();
+                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.script_finished));
+            });
+        }
+
+        @Override
+        public void onScriptStopped() {
+            mRunningScriptId = null;
+            runOnUiThread(MainActivity.this::updateScriptButton);
+        }
+    };
+
+    /** 按当前是否在播放脚本切换入口按钮的图标 */
+    private void updateScriptButton() {
+        if (mButtonScript == null) {
+            return;
+        }
+
+        boolean running = mRunningScriptId != null;
+        mButtonScript.setImageResource(running ? R.drawable.ic_close : R.drawable.ic_script);
+    }
+
+    /**
+     * 脚本模式入口：直接打开脚本列表。
+     *
+     * <p>上一次模拟的位置已经由 ServiceGo 保存在 SharedPreferences 里，脚本编辑页可以直接引用，
+     * 因此这里不需要绑定服务。</p>
+     */
+    private void doScriptLocation(View v) {
+        // 已经在播放脚本时，这个按钮变成“停止脚本”
+        if (mRunningScriptId != null && mServiceBinder != null) {
+            boolean finished = mServiceBinder.getScriptState() == ServiceGo.SCRIPT_STATE_FINISHED;
+            try {
+                mServiceBinder.stopScript();
+                mRunningScriptId = null;
+                updateScriptButton();
+                Snackbar.make(v, getResources().getString(
+                                finished ? R.string.script_finished : R.string.script_stopped),
+                        Snackbar.LENGTH_LONG).setAction("Action", null).show();
+
+                // 单次脚本已经跑完，顺手把服务停掉，避免前台通知一直挂着
+                // 注意：stopService 只有在没有绑定时才会真正销毁服务，所以这里要先解绑
+                if (finished) {
+                    unbindServiceIfNeeded();
+                    stopService(new Intent(MainActivity.this, ServiceGo.class));
+                    isMockServStart = false;
+                }
+                return;
+            } catch (Exception e) {
+                XLog.e("ERROR: stopScript", e);
+            }
+        }
+
+        startActivity(new Intent(MainActivity.this, ScriptActivity.class));
     }
 
     /** 读取设置里的海拔高度，非法输入时退回默认值，避免 NumberFormatException 闪退 */
@@ -1050,6 +1171,34 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             XLog.e("ERROR: setting_altitude is not a number");
             return 55.0;
         }
+    }
+
+    private void bindServiceIfNeeded() {
+        if (mBoundToService) {
+            return;
+        }
+
+        if (bindService(new Intent(MainActivity.this, ServiceGo.class), mConnection, BIND_AUTO_CREATE)) {
+            mBoundToService = true;
+        }
+    }
+
+    /** 统一解绑，避免退出时因为“服务不是本界面启动的”而漏掉解绑 */
+    private void unbindServiceIfNeeded() {
+        if (!mBoundToService && !isMockServStart) {
+            return;
+        }
+
+        try {
+            if (mServiceBinder != null) {
+                mServiceBinder.clearScriptListener();
+            }
+            unbindService(mConnection);
+        } catch (Exception e) {
+            XLog.e("ERROR: unbindService");
+        }
+        mBoundToService = false;
+        mServiceBinder = null;
     }
 
     private void startGoLocation() {
@@ -1066,6 +1215,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
         try {
             bindService(serviceGoIntent, mConnection, BIND_AUTO_CREATE);    // 绑定服务和活动，之后活动就可以去调服务的方法了
+            mBoundToService = true;
             startForegroundService(serviceGoIntent);
             XLog.d("startForegroundService: ServiceGo");
 
@@ -1077,7 +1227,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     }
 
     private void stopGoLocation() {
-        unbindService(mConnection); // 解绑服务，服务要记得解绑，不要造成内存泄漏
+        unbindServiceIfNeeded();
         Intent serviceGoIntent = new Intent(MainActivity.this, ServiceGo.class);
         stopService(serviceGoIntent);
         isMockServStart = false;
@@ -1109,7 +1259,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             } else {
                 if (mServiceBinder == null) {
                     // 服务还没连接上（例如进程刚被系统重启），重新绑定，避免空指针闪退
-                    bindService(new Intent(MainActivity.this, ServiceGo.class), mConnection, BIND_AUTO_CREATE);
+                    bindServiceIfNeeded();
                     GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_service));
                     return;
                 }

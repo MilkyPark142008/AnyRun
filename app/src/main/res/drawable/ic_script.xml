@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 脚本模式图标：折线路径 + 路点，用于导航菜单和主界面入口 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- 轨迹 -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M4.2,17.4L7.8,13.2C9.6,11.1 11.6,9.4 14.2,8.4L18.6,6.8L19.4,8.6L15.1,10.2C12.8,11.1 11,12.6 9.4,14.5L5.9,18.7Z" />
+
+    <!-- 起点 -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M4.5,19.5m-2.5,0a2.5,2.5 0 1,0 5,0a2.5,2.5 0 1,0 -5,0" />
+
+    <!-- 终点 -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M17.5,6.5m-2.2,0a2.2,2.2 0 1,0 4.4,0a2.2,2.2 0 1,0 -4.4,0" />
+
+    <!-- 终点旗杆 -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M16.6,3.2h1.6v6.4h-1.6z" />
+
+</vector>

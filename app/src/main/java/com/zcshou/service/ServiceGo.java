@@ -33,6 +33,11 @@ import com.elvishew.xlog.XLog;
 import com.zcshou.gogogo.MainActivity;
 import com.zcshou.gogogo.R;
 import com.zcshou.joystick.JoyStick;
+import com.zcshou.script.ScriptParser;
+import com.zcshou.script.ScriptPlayer;
+import com.zcshou.script.ScriptRoute;
+import com.zcshou.script.ScriptStore;
+import com.zcshou.script.ScriptWaypoint;
 
 public class ServiceGo extends Service {
     // 定位相关变量
@@ -40,17 +45,25 @@ public class ServiceGo extends Service {
     public static final double DEFAULT_LNG = 117.027707;
     public static final double DEFAULT_ALT = 55.0D;
     public static final float DEFAULT_BEA = 0.0F;
-    private double mCurLat = DEFAULT_LAT;
-    private double mCurLng = DEFAULT_LNG;
-    private double mCurAlt = DEFAULT_ALT;
-    private float mCurBea = DEFAULT_BEA;
-    private double mSpeed = 1.2;        /* 默认的速度，单位 m/s */
+    /* 下面几个位置字段会同时被主线程（绑定调用 / 摇杆）和定位线程（脚本推进）读写，统一加 volatile */
+    private volatile double mCurLat = DEFAULT_LAT;
+    private volatile double mCurLng = DEFAULT_LNG;
+    private volatile double mCurAlt = DEFAULT_ALT;
+    private volatile float mCurBea = DEFAULT_BEA;
+    private volatile double mSpeed = 1.2;        /* 默认的速度，单位 m/s */
     private static final int HANDLER_MSG_ID = 0;
     private static final String SERVICE_GO_HANDLER_NAME = "ServiceGoLocation";
     /* 服务被系统重新拉起（intent 为 null）时，用这里保存的上次位置恢复，避免拿不到位置 */
     private static final String KEY_LAST_LNG = "service_last_lng";
     private static final String KEY_LAST_LAT = "service_last_lat";
     private static final String KEY_LAST_ALT = "service_last_alt";
+    /** 服务被系统重新拉起时，用来恢复正在播放的脚本 */
+    private static final String KEY_LAST_SCRIPT_ID = "service_last_script_id";
+    /* 脚本播放状态 */
+    public static final int SCRIPT_STATE_IDLE = 0;
+    public static final int SCRIPT_STATE_PLAYING = 1;
+    public static final int SCRIPT_STATE_FINISHED = 2;
+    private volatile int mScriptState = SCRIPT_STATE_IDLE;
     private LocationManager mLocManager;
     private HandlerThread mLocHandlerThread;
     private Handler mLocHandler;
@@ -64,6 +77,20 @@ public class ServiceGo extends Service {
     private NoteActionReceiver mActReceiver;
     // 摇杆相关
     private JoyStick mJoyStick;
+    // 脚本相关
+    private ScriptPlayer mScriptPlayer;
+    private ScriptRoute mScriptRoute;
+    private ScriptStore mScriptStore;
+    private ScriptListener mScriptListener;
+
+    /** 脚本播放状态回调，供界面展示“第几个点 / 当前状态” */
+    public interface ScriptListener {
+        void onScriptSegment(ScriptRoute route, int index, ScriptWaypoint.Mode mode, double speed);
+
+        void onScriptFinish(ScriptRoute route);
+
+        void onScriptStopped();
+    }
 
     private final ServiceGoBinder mBinder = new ServiceGoBinder();
 
@@ -79,6 +106,8 @@ public class ServiceGo extends Service {
         XLog.i("SERVICEGO: onCreate");
 
         mLocManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
+
+        mScriptStore = new ScriptStore(this);
 
         removeTestProviderNetwork();
         addTestProviderNetwork();
@@ -98,11 +127,13 @@ public class ServiceGo extends Service {
         double lng = DEFAULT_LNG;
         double lat = DEFAULT_LAT;
         double alt = DEFAULT_ALT;
+        String scriptId = null;
 
         if (intent != null) {
             lng = intent.getDoubleExtra(MainActivity.LNG_MSG_ID, DEFAULT_LNG);
             lat = intent.getDoubleExtra(MainActivity.LAT_MSG_ID, DEFAULT_LAT);
             alt = intent.getDoubleExtra(MainActivity.ALT_MSG_ID, DEFAULT_ALT);
+            scriptId = intent.getStringExtra(MainActivity.SCRIPT_ROUTE_ID);
         } else {
             // 服务被系统重新拉起时 intent 为 null（原实现在这里会直接 NPE 闪退），
             // 这里改用上次保存的位置，保证服务能正常恢复
@@ -110,6 +141,7 @@ public class ServiceGo extends Service {
             lng = parseDouble(preferences.getString(KEY_LAST_LNG, null), DEFAULT_LNG);
             lat = parseDouble(preferences.getString(KEY_LAST_LAT, null), DEFAULT_LAT);
             alt = parseDouble(preferences.getString(KEY_LAST_ALT, null), DEFAULT_ALT);
+            scriptId = preferences.getString(KEY_LAST_SCRIPT_ID, null);
             XLog.i("SERVICEGO: restart with null intent");
         }
 
@@ -126,12 +158,25 @@ public class ServiceGo extends Service {
             }
         }
 
+        // 脚本模式：按脚本预设自动移动；没有脚本 id 时保持原来的“定点点位”行为
+        if (!isBlank(scriptId)) {
+            startScript(scriptId);
+        }
+
         return START_STICKY;
     }
 
     @Override
     public void onDestroy() {
         isStop = true;
+
+        if (mScriptPlayer != null) {
+            mScriptPlayer.stop();
+            mScriptPlayer = null;
+        }
+        mScriptRoute = null;
+        mScriptState = SCRIPT_STATE_IDLE;
+        mScriptListener = null;
 
         try {
             if (mLocHandler != null) {
@@ -273,6 +318,11 @@ public class ServiceGo extends Service {
                     if (!isStop) {
                         setLocationNetwork();
                         setLocationGPS();
+
+                        // 脚本模式：定时推进位置（内部会按“走 / 跑 / 骑”分段速度前进）
+                        if (mScriptPlayer != null && mScriptPlayer.isPlaying()) {
+                            mScriptPlayer.onTick();
+                        }
                     }
                 } catch (InterruptedException e) {
                     XLog.e("SERVICEGO: ERROR - handleMessage", e);
@@ -301,6 +351,158 @@ public class ServiceGo extends Service {
             return Double.parseDouble(value);
         } catch (NumberFormatException e) {
             return defaultValue;
+        }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    /*============================== 脚本模式 ==============================*/
+
+    /** 创建一个绑定到本服务的脚本播放器（只创建一次） */
+    private void initScriptPlayer() {
+        mScriptPlayer = new ScriptPlayer();
+        mScriptPlayer.setHandler(new ScriptPlayer.Handler() {
+            @Override
+            public void onScriptStart(ScriptRoute route, double lng, double lat, double alt) {
+                XLog.i("SERVICEGO: script start - " + route.name);
+            }
+
+            @Override
+            public synchronized void onScriptPosition(double lng, double lat, double alt, ScriptWaypoint.Mode mode,
+                                         double speed, double bearing) {
+                // 注意：这里运行在定位线程上，写的是 volatile 字段，随后由定位循环注入给系统
+                mCurLng = lng;
+                mCurLat = lat;
+                mCurAlt = alt;
+                mSpeed = speed;
+                mCurBea = (float) bearing;
+
+                if (mJoyStick != null) {
+                    try {
+                        mJoyStick.setCurrentPosition(lng, lat, alt);
+                    } catch (Exception e) {
+                        XLog.e("SERVICEGO: ERROR - script setCurrentPosition", e);
+                    }
+                }
+            }
+
+            @Override
+            public synchronized void onScriptSegment(ScriptRoute route, int index, ScriptWaypoint.Mode mode, double speed) {
+                XLog.i("SERVICEGO: script segment " + index + " - " + mode.key + " " + speed + "m/s");
+                if (mScriptListener != null) {
+                    mScriptListener.onScriptSegment(route, index, mode, speed);
+                }
+            }
+
+            @Override
+            public synchronized void onScriptFinish(ScriptRoute route) {
+                mScriptState = SCRIPT_STATE_FINISHED;
+                XLog.i("SERVICEGO: script finished - " + route.name);
+                if (mScriptListener != null) {
+                    mScriptListener.onScriptFinish(route);
+                }
+            }
+
+            @Override
+            public synchronized void onScriptError(String message) {
+                mScriptState = SCRIPT_STATE_IDLE;
+                XLog.e("SERVICEGO: script error - " + message);
+                if (mScriptListener != null) {
+                    mScriptListener.onScriptStopped();
+                }
+            }
+        });
+    }
+
+    /** 读取设置里各状态的默认速度，顺序为 步行 / 跑步 / 骑行 */
+    private double[] getModeSpeeds() {
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+
+        double walk = parseDouble(preferences.getString("setting_walk", "1.2"), 1.2);
+        double run = parseDouble(preferences.getString("setting_run", "3.6"), 3.6);
+        double bike = parseDouble(preferences.getString("setting_bike", "10.0"), 10.0);
+
+        return ScriptParser.modeSpeeds(walk, run, bike);
+    }
+
+    private double getSettingAltitude() {
+        return parseDouble(
+                PreferenceManager.getDefaultSharedPreferences(this).getString("setting_altitude", "55.0"), DEFAULT_ALT);
+    }
+
+    /**
+     * 开始播放指定 id 的脚本。
+     *
+     * <p>位置对齐、状态切换、循环都由 {@link ScriptPlayer} 负责，这里只做加载与启动。</p>
+     */
+    private void startScript(String scriptId) {
+        if (mScriptStore == null) {
+            mScriptStore = new ScriptStore(this);
+        }
+
+        ScriptRoute route = mScriptStore.load(scriptId);
+        if (route == null || route.points.isEmpty()) {
+            XLog.e("SERVICEGO: script not found - " + scriptId);
+            return;
+        }
+
+        // 每次启动都按最新文本重新解析，保证编辑过的脚本立刻生效
+        if (!isBlank(route.text)) {
+            boolean fromBd09 = PreferenceManager.getDefaultSharedPreferences(this)
+                    .getBoolean(ScriptParser.KEY_SCRIPT_FROM_BD09, false);
+            ScriptParser.ParseResult parseResult = ScriptParser.parse(route.text, fromBd09, getModeSpeeds());
+            if (parseResult.isOk()) {
+                route.points = parseResult.route.points;
+                // 脚本里不写海拔时，用设置里的海拔补齐
+                double alt = getSettingAltitude();
+                for (ScriptWaypoint point : route.points) {
+                    point.alt = alt;
+                }
+            } else {
+                XLog.e("SERVICEGO: script parse failed - " + parseResult.error);
+            }
+        }
+
+        if (mScriptPlayer == null) {
+            initScriptPlayer();
+        }
+
+        mScriptRoute = route;
+        mScriptState = SCRIPT_STATE_PLAYING;
+        mScriptStore.setRunningScriptId(route.id);
+
+        PreferenceManager.getDefaultSharedPreferences(this).edit()
+                .putString(KEY_LAST_SCRIPT_ID, route.id)
+                .apply();
+
+        mScriptPlayer.start(route, mCurLng, mCurLat);
+
+        // 脚本起点也记一份，服务重启后能回到轨迹附近
+        saveLastPosition();
+    }
+
+    /** 停止脚本播放，回到手动控制（当前坐标保持不变） */
+    public void stopScript() {
+        if (mScriptPlayer != null) {
+            mScriptPlayer.stop();
+        }
+
+        boolean hadScript = mScriptRoute != null || mScriptState != SCRIPT_STATE_IDLE;
+        mScriptRoute = null;
+        mScriptState = SCRIPT_STATE_IDLE;
+
+        if (mScriptStore != null) {
+            mScriptStore.setRunningScriptId(null);
+        }
+
+        PreferenceManager.getDefaultSharedPreferences(this).edit()
+                .remove(KEY_LAST_SCRIPT_ID)
+                .apply();
+
+        if (hadScript && mScriptListener != null) {
+            mScriptListener.onScriptStopped();
         }
     }
 
@@ -476,13 +678,67 @@ public class ServiceGo extends Service {
                 return;
             }
 
+            // 手动传送会打断脚本播放
+            if (mScriptPlayer != null && mScriptPlayer.isPlaying()) {
+                stopScript();
+            }
+
             mLocHandler.removeMessages(HANDLER_MSG_ID);
             mCurLng = lng;
             mCurLat = lat;
             mCurAlt = alt;
+            mSpeed = 1.2;
+            mCurBea = DEFAULT_BEA;
             saveLastPosition();
             mLocHandler.sendEmptyMessage(HANDLER_MSG_ID);
 
+            if (mJoyStick != null) {
+                mJoyStick.setCurrentPosition(mCurLng, mCurLat, mCurAlt);
+            }
+        }
+
+        /** 开始播放脚本（重复调用会切换到新的脚本） */
+        public boolean startScript(String scriptId) {
+            if (isBlank(scriptId)) {
+                return false;
+            }
+
+            ServiceGo.this.startScript(scriptId);
+            return mScriptState == SCRIPT_STATE_PLAYING;
+        }
+
+        /** 停止脚本播放 */
+        public void stopScript() {
+            ServiceGo.this.stopScript();
+        }
+
+        public int getScriptState() {
+            return mScriptState;
+        }
+
+        /** 当前播放的脚本 id，未播放时返回 null */
+        public String getRunningScriptId() {
+            return mScriptRoute == null ? null : mScriptRoute.id;
+        }
+
+        public String getRunningScriptName() {
+            return mScriptRoute == null ? null : mScriptRoute.name;
+        }
+
+        public int getRunningScriptPointCount() {
+            return mScriptRoute == null ? 0 : mScriptRoute.size();
+        }
+
+        public void setScriptListener(ScriptListener listener) {
+            mScriptListener = listener;
+        }
+
+        public void clearScriptListener() {
+            mScriptListener = null;
+        }
+
+        /** 把当前位置同步给摇杆（例如脚本运行时界面重新绑定） */
+        public void syncJoyStick() {
             if (mJoyStick != null) {
                 mJoyStick.setCurrentPosition(mCurLng, mCurLat, mCurAlt);
             }
