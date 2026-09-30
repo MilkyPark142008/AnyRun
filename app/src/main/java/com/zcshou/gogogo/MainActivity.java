@@ -1,5 +1,6 @@
 package com.zcshou.gogogo;
 
+import android.Manifest;
 import android.app.DownloadManager;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
@@ -11,6 +12,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.graphics.drawable.Drawable;
@@ -562,6 +564,16 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
      */
     private void initMapLocation() {
         try {
+            // 定位属于运行时权限：WelcomeActivity 已申请，这里再显式检查一次，
+            // 既避免权限被撤销后抛 SecurityException，也满足 lint 的 MissingPermission 检查。
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                    != PackageManager.PERMISSION_GRANTED
+                    && ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
+                    != PackageManager.PERMISSION_GRANTED) {
+                XLog.e("ERROR: location permission is not granted");
+                return;
+            }
+
             // 定位图层
             mMyLocationOverlay = new MyLocationNewOverlay(new GpsMyLocationProvider(this), mMapView);
             mMyLocationOverlay.enableMyLocation();
