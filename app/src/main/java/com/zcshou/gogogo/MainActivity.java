@@ -36,6 +36,8 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
@@ -45,6 +47,7 @@ import android.widget.ListView;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.SimpleAdapter;
+import android.widget.Spinner;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -63,6 +66,8 @@ import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.infowindow.InfoWindow;
 import org.osmdroid.views.overlay.MapEventsOverlay;
 import org.osmdroid.views.overlay.Marker;
+import org.osmdroid.views.overlay.Overlay;
+import org.osmdroid.views.overlay.Polyline;
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider;
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay;
 
@@ -84,7 +89,10 @@ import java.util.Map;
 import com.zcshou.service.ServiceGo;
 import com.zcshou.database.DataBaseHistoryLocation;
 import com.zcshou.database.DataBaseHistorySearch;
+import com.zcshou.script.ScriptParser;
+import com.zcshou.script.ScriptRoute;
 import com.zcshou.script.ScriptStore;
+import com.zcshou.script.ScriptWaypoint;
 import com.zcshou.utils.ShareUtils;
 import com.zcshou.utils.GoUtils;
 import com.zcshou.utils.MapUtils;
@@ -161,6 +169,28 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     private FloatingActionButton mButtonScript;
     /** 当前正在播放的脚本 id，null 表示没有在播放脚本（由定位线程回调更新） */
     private volatile String mRunningScriptId;
+    /*============================== 主界面连续选点（连贯移动） ==============================*/
+    /**
+     * 主界面选点生成的路线在脚本存储里的固定 id。
+     * 每次重新选点都覆盖同一条，避免脚本列表里堆满“地图路线”。
+     */
+    private static final String MAP_ROUTE_ID = "map_route_from_main_map";
+    /** 路线选点模式开关：开启时点地图是“往路线末尾加一个路点”，而不是原来的“选一个传送点” */
+    private boolean mRoutePicking = false;
+    /** 已选路点（WGS-84，与 ServiceGo / ScriptPlayer 使用的坐标语义一致） */
+    private final List<ScriptWaypoint> mRoutePoints = new ArrayList<>();
+    /** 新路点使用的状态（步行 / 跑步 / 骑行），速度取“设置”里对应的值 */
+    private ScriptWaypoint.Mode mRouteMode = ScriptWaypoint.Mode.WALK;
+    private FloatingActionButton mButtonRoute;
+    private LinearLayout mRouteBar;
+    private TextView mRouteHint;
+    private Spinner mRouteModeSpinner;
+    private Button mRouteGoButton;
+    /** 路线连线：点地图加路点时实时重画 */
+    private Polyline mRouteLine;
+    private final List<Marker> mRouteMarkers = new ArrayList<>();
+    /** 地图点击派发器：始终保持在图层最上面，保证点地图不会被路线图钉 / 连线吃掉 */
+    private MapEventsOverlay mMapEventsOverlay;
     /*============================== 历史记录 相关 ==============================*/
     private SQLiteDatabase mLocationHistoryDB;
     private SQLiteDatabase mSearchHistoryDB;
@@ -205,6 +235,8 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         initMapButton();
 
         initGoBtn();
+
+        initRoutePicking();
 
         mConnection = new ServiceConnection() {
             @Override
@@ -575,6 +607,12 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
              */
             @Override
             public boolean singleTapConfirmedHelper(GeoPoint p) {
+                // 路线选点模式：点地图 = 往路线末尾加一个路点，不改动原来的单点传送标记
+                if (mRoutePicking) {
+                    addRoutePoint(p.getLongitude(), p.getLatitude());
+                    return true;
+                }
+
                 mMarkLatLngMap = wgs84ToBd09(p.getLongitude(), p.getLatitude());
                 markMap();
                 return true;
@@ -585,6 +623,11 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
              */
             @Override
             public boolean longPressHelper(GeoPoint p) {
+                if (mRoutePicking) {
+                    addRoutePoint(p.getLongitude(), p.getLatitude());
+                    return true;
+                }
+
                 mMarkLatLngMap = wgs84ToBd09(p.getLongitude(), p.getLatitude());
                 markMap();
                 // 逆地理编码，传入 WGS-84 坐标
@@ -608,6 +651,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 return true;
             }
         });
+        mMapEventsOverlay = eventsOverlay;
         mMapView.getOverlays().add(eventsOverlay);
 
         mSensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);// 获取传感器管理服务
@@ -1119,14 +1163,14 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
     };
 
-    /** 按当前是否在播放脚本切换入口按钮的图标 */
+    /** 按当前是否在播放脚本切换入口按钮的图标（路线操作条上的按钮随之刷新） */
     private void updateScriptButton() {
-        if (mButtonScript == null) {
-            return;
+        if (mButtonScript != null) {
+            boolean running = mRunningScriptId != null;
+            mButtonScript.setImageResource(running ? R.drawable.ic_close : R.drawable.ic_script);
         }
 
-        boolean running = mRunningScriptId != null;
-        mButtonScript.setImageResource(running ? R.drawable.ic_close : R.drawable.ic_script);
+        updateRouteUi();
     }
 
     /**
@@ -1161,6 +1205,306 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
 
         startActivity(new Intent(MainActivity.this, ScriptActivity.class));
+    }
+
+    /*============================== 主界面连续选点成路线（连贯移动） ==============================*/
+
+    /** 路线选点入口按钮、操作条与连线图层 */
+    private void initRoutePicking() {
+        mButtonRoute = findViewById(R.id.faBtnRoute);
+        if (mButtonRoute != null) {
+            mButtonRoute.setOnClickListener(v -> setRoutePicking(!mRoutePicking));
+        }
+
+        mRouteBar = findViewById(R.id.route_bar);
+        mRouteHint = findViewById(R.id.route_hint);
+        mRouteGoButton = findViewById(R.id.route_go);
+
+        mRouteModeSpinner = findViewById(R.id.route_mode);
+        if (mRouteModeSpinner != null) {
+            ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
+                    new String[] {
+                            getResources().getString(R.string.script_mode_walk),
+                            getResources().getString(R.string.script_mode_run),
+                            getResources().getString(R.string.script_mode_bike)});
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            mRouteModeSpinner.setAdapter(adapter);
+            mRouteModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+                @Override
+                public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                    mRouteMode = position == 1 ? ScriptWaypoint.Mode.RUN
+                            : position == 2 ? ScriptWaypoint.Mode.BIKE : ScriptWaypoint.Mode.WALK;
+                }
+
+                @Override
+                public void onNothingSelected(AdapterView<?> parent) {
+                }
+            });
+        }
+
+        View undoButton = findViewById(R.id.route_undo);
+        if (undoButton != null) {
+            undoButton.setOnClickListener(v -> undoRoutePoint());
+        }
+        View clearButton = findViewById(R.id.route_clear);
+        if (clearButton != null) {
+            clearButton.setOnClickListener(v -> clearRoutePoints());
+        }
+        View closeButton = findViewById(R.id.route_close);
+        if (closeButton != null) {
+            closeButton.setOnClickListener(v -> setRoutePicking(false));
+        }
+        if (mRouteGoButton != null) {
+            mRouteGoButton.setOnClickListener(v -> {
+                if (isMapRoutePlaying()) {
+                    stopMapRoute();
+                } else {
+                    startMapRoute();
+                }
+            });
+        }
+
+        // 连线图层：先放进地图，选点过程中不断更新坐标列表
+        if (mMapView != null) {
+            mRouteLine = new Polyline(mMapView);
+            mRouteLine.getOutlinePaint().setColor(ContextCompat.getColor(this, R.color.colorAccent));
+            mRouteLine.getOutlinePaint().setStrokeWidth(8.0f);
+            addRouteOverlay(mRouteLine);
+        }
+
+        updateRouteUi();
+    }
+
+    /**
+     * 加入路线图层（连线 / 图钉）。
+     *
+     * <p>osmdroid 的事件按图层反序派发：这些图层只用来“看”，如果排在
+     * {@link MapEventsOverlay} 之后，点在已有图钉或连线上就触达不到地图回调，
+     * 也就没法继续加路点。所以每次加完都把点击派发器挪回最上面。</p>
+     */
+    private void addRouteOverlay(Overlay overlay) {
+        if (mMapView == null || overlay == null) {
+            return;
+        }
+
+        List<Overlay> overlays = mMapView.getOverlays();
+        overlays.add(overlay);
+        if (mMapEventsOverlay != null && overlays.remove(mMapEventsOverlay)) {
+            overlays.add(mMapEventsOverlay);
+        }
+    }
+
+    /** 开关“路线选点”模式 */
+    private void setRoutePicking(boolean picking) {
+        mRoutePicking = picking;
+        if (mRouteBar != null) {
+            mRouteBar.setVisibility(picking ? View.VISIBLE : View.GONE);
+        }
+        if (mButtonRoute != null) {
+            mButtonRoute.setImageResource(picking ? R.drawable.ic_close : R.drawable.ic_route);
+        }
+
+        GoUtils.DisplayToast(this, getResources().getString(
+                picking ? R.string.route_mode_on : R.string.route_mode_off));
+        updateRouteUi();
+    }
+
+    /**
+     * 往路线末尾追加一个路点。
+     *
+     * @param lngWgs84 经度（WGS-84：地图回调给的就是这个坐标系，也正是 ServiceGo 注入系统的坐标系）
+     * @param latWgs84 纬度（WGS-84）
+     */
+    private void addRoutePoint(double lngWgs84, double latWgs84) {
+        mRoutePoints.add(new ScriptWaypoint(lngWgs84, latWgs84, getSettingAltitude(),
+                mRouteMode, getModeSpeed(mRouteMode), 0));
+        redrawRoute();
+    }
+
+    /** 撤销最后一个路点 */
+    private void undoRoutePoint() {
+        if (mRoutePoints.isEmpty()) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.route_empty));
+            return;
+        }
+
+        mRoutePoints.remove(mRoutePoints.size() - 1);
+        redrawRoute();
+    }
+
+    /** 清空所有路点（连同地图上的连线与图钉） */
+    private void clearRoutePoints() {
+        mRoutePoints.clear();
+        redrawRoute();
+    }
+
+    /** 重画路线：连线 + 每个路点一个图钉 */
+    private void redrawRoute() {
+        if (mMapView == null) {
+            return;
+        }
+
+        for (Marker marker : mRouteMarkers) {
+            marker.closeInfoWindow();
+            mMapView.getOverlays().remove(marker);
+        }
+        mRouteMarkers.clear();
+
+        List<GeoPoint> points = new ArrayList<>();
+        for (ScriptWaypoint point : mRoutePoints) {
+            GeoPoint geoPoint = new GeoPoint(point.lat, point.lng);
+            points.add(geoPoint);
+
+            Marker marker = createMarkMarker();
+            if (marker != null) {
+                marker.setPosition(geoPoint);
+                marker.setTitle(getResources().getString(R.string.route_point_title, mRouteMarkers.size() + 1));
+                addRouteOverlay(marker);
+                mRouteMarkers.add(marker);
+            }
+        }
+
+        if (mRouteLine != null) {
+            mRouteLine.setPoints(points);
+        }
+
+        mMapView.invalidate();
+        updateRouteUi();
+    }
+
+    /** 刷新操作条：已选点数 + 主按钮是“开始移动”还是“停止移动” */
+    private void updateRouteUi() {
+        if (mRouteHint != null) {
+            int count = mRoutePoints.size();
+            mRouteHint.setText(count == 0
+                    ? getResources().getString(R.string.route_hint_empty)
+                    : getResources().getString(R.string.route_hint_count, count));
+        }
+
+        if (mRouteGoButton != null) {
+            mRouteGoButton.setText(isMapRoutePlaying() ? R.string.route_stop : R.string.route_go);
+        }
+    }
+
+    /** 当前正在跑的路线是不是主界面选的这条 */
+    private boolean isMapRoutePlaying() {
+        return MAP_ROUTE_ID.equals(mRunningScriptId);
+    }
+
+    /** 把当前选点存成一条脚本路线，并让 ServiceGo 沿路线平滑移动 */
+    private void startMapRoute() {
+        if (mRoutePoints.size() < 2) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.route_need_two));
+            return;
+        }
+
+        if (!GoUtils.isNetworkAvailable(this)) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_network));
+            return;
+        }
+        if (!GoUtils.isGpsOpened(this)) {
+            GoUtils.showEnableGpsDialog(this);
+            return;
+        }
+        if (!Settings.canDrawOverlays(getApplicationContext())) {
+            GoUtils.showEnableFloatWindowDialog(this);
+            return;
+        }
+        if (!GoUtils.isAllowMockLocation(this)) {
+            GoUtils.showEnableMockLocationDialog(this);
+            return;
+        }
+
+        ScriptRoute route = buildMapRoute();
+        new ScriptStore(this).save(route);
+
+        ScriptWaypoint first = route.points.get(0);
+        Intent intent = new Intent(MainActivity.this, ServiceGo.class);
+        intent.putExtra(SCRIPT_ROUTE_ID, route.id);
+        intent.putExtra(LNG_MSG_ID, first.lng);
+        intent.putExtra(LAT_MSG_ID, first.lat);
+        intent.putExtra(ALT_MSG_ID, first.alt);
+
+        try {
+            bindServiceIfNeeded();
+            startForegroundService(intent);
+            mRunningScriptId = route.id;
+            updateScriptButton();
+            GoUtils.DisplayToast(this, getResources().getString(R.string.route_started,
+                    route.points.size(), ScriptParser.formatDistance(ScriptParser.totalDistance(route))));
+        } catch (Exception e) {
+            XLog.e("ERROR: startMapRoute", e);
+            GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_service));
+        }
+    }
+
+    /** 停止沿路线移动（当前位置保持不变） */
+    private void stopMapRoute() {
+        if (mServiceBinder != null) {
+            try {
+                mServiceBinder.stopScript();
+            } catch (Exception e) {
+                XLog.e("ERROR: stopMapRoute", e);
+            }
+        } else {
+            try {
+                stopService(new Intent(MainActivity.this, ServiceGo.class));
+            } catch (Exception e) {
+                XLog.e("ERROR: stopMapRoute");
+            }
+        }
+
+        mRunningScriptId = null;
+        updateScriptButton();
+        GoUtils.DisplayToast(this, getResources().getString(R.string.script_stopped));
+    }
+
+    /**
+     * 把主界面选的点整理成一条脚本路线。
+     *
+     * <p>同时按脚本格式生成文本：一是让 ServiceGo 重新解析文本后依旧得到这些 WGS-84 坐标
+     * （文本按“脚本模式记住的坐标系”输出，见 {@link ScriptParser#KEY_SCRIPT_FROM_BD09}），
+     * 二是让这条路线在脚本模式里能直接看到和编辑。</p>
+     */
+    private ScriptRoute buildMapRoute() {
+        ScriptRoute route = new ScriptRoute();
+        route.id = MAP_ROUTE_ID;
+        route.name = getResources().getString(R.string.route_default_name);
+        route.endMode = ScriptRoute.END_STOP;
+        route.points = new ArrayList<>(mRoutePoints);
+
+        boolean fromBd09 = sharedPreferences.getBoolean(ScriptParser.KEY_SCRIPT_FROM_BD09, false);
+        StringBuilder text = new StringBuilder();
+        for (ScriptWaypoint point : route.points) {
+            text.append(ScriptParser.formatPoint(point, fromBd09)).append('\n');
+        }
+        route.text = text.toString();
+
+        return route;
+    }
+
+    /** “设置”里某个状态对应的速度（米/秒） */
+    private double getModeSpeed(ScriptWaypoint.Mode mode) {
+        double[] speeds = getModeSpeeds();
+        return speeds[Math.max(0, Math.min(speeds.length - 1, mode.ordinal()))];
+    }
+
+    /** “设置”里的步行 / 跑步 / 骑行速度，顺序与 {@link ScriptWaypoint.Mode} 一致 */
+    private double[] getModeSpeeds() {
+        return ScriptParser.modeSpeeds(
+                getDoubleSetting("setting_walk", 1.2),
+                getDoubleSetting("setting_run", 3.6),
+                getDoubleSetting("setting_bike", 10.0));
+    }
+
+    /** 读取浮点型设置项，非法输入时退回默认值 */
+    private double getDoubleSetting(String key, double defaultValue) {
+        try {
+            return Double.parseDouble(sharedPreferences.getString(key, Double.toString(defaultValue)));
+        } catch (Exception e) {
+            XLog.e("ERROR: invalid setting - " + key);
+            return defaultValue;
+        }
     }
 
     /** 读取设置里的海拔高度，非法输入时退回默认值，避免 NumberFormatException 闪退 */

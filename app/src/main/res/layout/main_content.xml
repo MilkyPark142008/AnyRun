@@ -54,6 +54,18 @@
             app:pressedTranslationZ="12dp"
             app:srcCompat="@drawable/ic_script" />
 
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            android:id="@+id/faBtnRoute"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_marginStart="30dp"
+            android:layout_marginBottom="220dp"
+            android:contentDescription="@string/route_button"
+            app:elevation="6dp"
+            app:pressedTranslationZ="12dp"
+            app:srcCompat="@drawable/ic_route" />
+
         <LinearLayout
             android:id="@+id/search_linear"
             android:layout_width="match_parent"
@@ -82,6 +94,89 @@
                 android:layout_margin="10dp"
                 android:layout_height="wrap_content">
             </ListView>
+        </LinearLayout>
+
+        <!--
+            路线选点操作条：只在“路线选点”模式下显示。
+            放在顶部（右侧留出地图类型切换按钮的位置）是为了不和左下角三个悬浮按钮打架。
+        -->
+        <LinearLayout
+            android:id="@+id/route_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:layout_marginStart="8dp"
+            android:layout_marginTop="?attr/actionBarSize"
+            android:layout_marginEnd="100dp"
+            android:background="#e6ffffff"
+            android:orientation="vertical"
+            android:padding="8dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/route_hint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/route_hint_empty"
+                android:textSize="12sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <Spinner
+                    android:id="@+id/route_mode"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1.4" />
+
+                <Button
+                    android:id="@+id/route_undo"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:minWidth="0dp"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="2dp"
+                    android:text="@string/route_undo"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/route_clear"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:minWidth="0dp"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="2dp"
+                    android:text="@string/route_clear"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/route_go"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1.5"
+                    android:minWidth="0dp"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="2dp"
+                    android:text="@string/route_go"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/route_close"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1.2"
+                    android:minWidth="0dp"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="2dp"
+                    android:text="@string/route_exit"
+                    android:textSize="12sp" />
+            </LinearLayout>
         </LinearLayout>
 
     </FrameLayout>
