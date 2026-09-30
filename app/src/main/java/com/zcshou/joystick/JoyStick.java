@@ -618,14 +618,9 @@ public class JoyStick extends View {
             return;
         }
 
-        // 清除选点
-        if (mMarkMarker != null) {
-            try {
-                mMarkMarker.setPosition(null);
-            } catch (Exception e) {
-                Log.e("JOYSTICK", "ERROR - clear mark");
-            }
-        }
+        // 清除选点：osmdroid 的 Marker 不接受 null 坐标（内部会做位置运算，直接 NPE），
+        // 这里把标记从图层里摘掉，选点时再放回去
+        clearMark();
 
         if (mCurMapLngLat != null) {
             GeoPoint wgs84 = bd09ToWgs84(mCurMapLngLat);
@@ -648,12 +643,31 @@ public class JoyStick extends View {
         GeoPoint wgs84 = bd09ToWgs84(bd09Point);
 
         if (mMarkMarker != null) {
+            mMarkMarker.setEnabled(true);
+            if (!mMapView.getOverlays().contains(mMarkMarker)) {
+                mMapView.getOverlays().add(mMarkMarker);
+            }
             mMarkMarker.setPosition(wgs84);
         }
 
         mMapView.getController().setZoom(18.0);
         mMapView.getController().animateTo(wgs84);
         mMapView.invalidate();
+    }
+
+    /** 摘掉选点标记（不销毁对象，选点时再放回去） */
+    private void clearMark() {
+        if (mMapView == null || mMarkMarker == null) {
+            return;
+        }
+
+        try {
+            mMarkMarker.closeInfoWindow();
+            mMarkMarker.setEnabled(false);
+            mMapView.getOverlays().remove(mMarkMarker);
+        } catch (Exception e) {
+            Log.e("JOYSTICK", "ERROR - clearMark");
+        }
     }
 
     /**

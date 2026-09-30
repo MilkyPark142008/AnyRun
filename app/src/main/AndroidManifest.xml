@@ -14,6 +14,8 @@
 
     <!-- 前台服务：模拟位置需要常驻运行 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14+ 声明 location 类型前台服务所必需（普通权限，无运行时弹窗） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <!-- Android 13+ 的前台服务通知（显示的摇杆按钮就挂在通知上），拒绝也不影响模拟位置 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -42,6 +44,7 @@
 
         <service
             android:exported="false"
+            android:foregroundServiceType="location"
             android:name="com.zcshou.service.ServiceGo" />
 
         <provider

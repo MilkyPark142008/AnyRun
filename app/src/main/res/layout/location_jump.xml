@@ -36,7 +36,7 @@
 
         <RadioButton
             android:id="@+id/jump_type_bd"
-            android:layout_width="match_parent"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:checked="true"
@@ -44,7 +44,7 @@
 
         <RadioButton
             android:id="@+id/jump_type_gps"
-            android:layout_width="match_parent"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="@string/input_position_gps" />

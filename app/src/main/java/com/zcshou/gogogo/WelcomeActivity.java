@@ -39,6 +39,13 @@ public class WelcomeActivity extends AppCompatActivity {
     private static final int SDK_PERMISSION_REQUEST = 127;
     private static final ArrayList<String> ReqPermissions = new ArrayList<>();
 
+    /*
+     * 通知权限（POST_NOTIFICATIONS）与 Android 13（API 33）都是 API 33 才引入的符号，
+     * 而本工程的 compileSdk 仍是 32，直接引用会编译不过，所以这里用常量/字符串字面量代替。
+     */
+    private static final int ANDROID_13_API_LEVEL = 33;
+    private static final String PERMISSION_POST_NOTIFICATIONS = "android.permission.POST_NOTIFICATIONS";
+
     private CheckBox checkBox;
     private Boolean mAgreement;
     private Boolean mPrivacy;
@@ -118,9 +125,9 @@ public class WelcomeActivity extends AppCompatActivity {
             ReqPermissions.add(Manifest.permission.ACCESS_COARSE_LOCATION);
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            ReqPermissions.add(Manifest.permission.POST_NOTIFICATIONS);
+        if (Build.VERSION.SDK_INT >= ANDROID_13_API_LEVEL
+                && checkSelfPermission(PERMISSION_POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            ReqPermissions.add(PERMISSION_POST_NOTIFICATIONS);
         }
 
         isPermission = hasLocationPermission();

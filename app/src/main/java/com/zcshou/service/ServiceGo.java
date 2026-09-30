@@ -275,7 +275,7 @@ public class ServiceGo extends Service {
                         setLocationGPS();
                     }
                 } catch (InterruptedException e) {
-                    XLog.e("SERVICEGO: ERROR - handleMessage");
+                    XLog.e("SERVICEGO: ERROR - handleMessage", e);
                     Thread.currentThread().interrupt();
                     return;
                 } catch (Throwable e) {
