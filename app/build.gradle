@@ -9,13 +9,13 @@ android {
 
     signingConfigs {
         debug {
-            storeFile file('..\\keystore\\GoGoGo.jks')
+            storeFile file('../keystore/GoGoGo.jks')
             storePassword 'GoGoGo'
             keyAlias 'GoGoKey'
             keyPassword 'GoGoGo'
         }
         release {
-            storeFile file('..\\keystore\\GoGoGo.jks')
+            storeFile file('../keystore/GoGoGo.jks')
             storePassword 'GoGoGo'
             keyAlias 'GoGoKey'
             keyPassword 'GoGoGo'

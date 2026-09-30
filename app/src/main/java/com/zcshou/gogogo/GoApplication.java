@@ -15,6 +15,7 @@ import com.elvishew.xlog.printer.file.clean.FileLastModifiedCleanStrategy;
 import com.elvishew.xlog.printer.file.naming.ChangelessFileNameGenerator;
 
 import org.osmdroid.config.Configuration;
+import org.osmdroid.config.IConfigurationProvider;
 
 import java.io.File;
 
@@ -36,7 +37,7 @@ public class GoApplication extends Application {
      * 初始化 osmdroid（瓦片地图引擎）
      */
     private void initOsmdroid() {
-        Configuration osmConfig = Configuration.getInstance();
+        IConfigurationProvider osmConfig = Configuration.getInstance();
         // 读取 osmdroid 自身的配置项（瓦片缓存大小、过期时间等）
         osmConfig.load(this, PreferenceManager.getDefaultSharedPreferences(this));
         // OSM / Esri 的瓦片服务器要求带上有意义的 User-Agent，否则会直接返回 403
