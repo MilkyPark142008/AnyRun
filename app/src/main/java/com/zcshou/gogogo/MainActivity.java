@@ -220,17 +220,25 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     @Override
     protected void onPause() {
         XLog.i("MainActivity: onPause");
-        mMapView.onPause();
-        mSensorManager.unregisterListener(this);
+        if (mMapView != null) {
+            mMapView.onPause();
+        }
+        unregisterSensorListener();
         super.onPause();
     }
 
     @Override
     protected void onResume() {
         XLog.i("MainActivity: onResume");
-        mMapView.onResume();
-        mSensorManager.registerListener(this, mSensorAccelerometer, SensorManager.SENSOR_DELAY_UI);
-        mSensorManager.registerListener(this, mSensorMagnetic, SensorManager.SENSOR_DELAY_UI);
+        if (mMapView != null) {
+            mMapView.onResume();
+        }
+        if (mSensorManager != null && mSensorAccelerometer != null) {
+            mSensorManager.registerListener(this, mSensorAccelerometer, SensorManager.SENSOR_DELAY_UI);
+        }
+        if (mSensorManager != null && mSensorMagnetic != null) {
+            mSensorManager.registerListener(this, mSensorMagnetic, SensorManager.SENSOR_DELAY_UI);
+        }
         super.onResume();
     }
 
@@ -238,7 +246,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     protected void onStop() {
         XLog.i("MainActivity: onStop");
         //取消注册传感器监听
-        mSensorManager.unregisterListener(this);
+        unregisterSensorListener();
         super.onStop();
     }
 
@@ -247,29 +255,59 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         XLog.i("MainActivity: onDestroy");
 
         if (isMockServStart) {
-            unbindService(mConnection); // 解绑服务，服务要记得解绑，不要造成内存泄漏
-            Intent serviceGoIntent = new Intent(MainActivity.this, ServiceGo.class);
-            stopService(serviceGoIntent);
+            try {
+                unbindService(mConnection); // 解绑服务，服务要记得解绑，不要造成内存泄漏
+                Intent serviceGoIntent = new Intent(MainActivity.this, ServiceGo.class);
+                stopService(serviceGoIntent);
+            } catch (Exception e) {
+                XLog.e("ERROR: stop ServiceGo");
+            }
         }
-        unregisterReceiver(mDownloadBdRcv);
 
-        mSensorManager.unregisterListener(this);
+        try {
+            unregisterReceiver(mDownloadBdRcv);
+        } catch (Exception e) {
+            XLog.e("ERROR: unregisterReceiver");
+        }
+
+        unregisterSensorListener();
 
         // 退出时销毁定位
         if (mSysLocManager != null && mSysLocListener != null) {
-            mSysLocManager.removeUpdates(mSysLocListener);
+            try {
+                mSysLocManager.removeUpdates(mSysLocListener);
+            } catch (Exception e) {
+                XLog.e("ERROR: removeUpdates");
+            }
         }
         // 关闭定位图层
         if (mMyLocationOverlay != null) {
-            mMyLocationOverlay.disableMyLocation();
+            try {
+                mMyLocationOverlay.disableMyLocation();
+            } catch (Exception e) {
+                XLog.e("ERROR: disableMyLocation");
+            }
         }
-        mMapView.onDetach();
+        if (mMapView != null) {
+            mMapView.onDetach();
+        }
 
         //close db
-        mLocationHistoryDB.close();
-        mSearchHistoryDB.close();
+        if (mLocationHistoryDB != null) {
+            mLocationHistoryDB.close();
+        }
+        if (mSearchHistoryDB != null) {
+            mSearchHistoryDB.close();
+        }
 
         super.onDestroy();
+    }
+
+    /** 注销传感器监听（mSensorManager 可能因为初始化失败而为空） */
+    private void unregisterSensorListener() {
+        if (mSensorManager != null) {
+            mSensorManager.unregisterListener(this);
+        }
     }
 
     @Override
@@ -684,6 +722,9 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             }
         });
 
+        ImageButton jumpPosBtn = this.findViewById(R.id.jump_pos);
+        jumpPosBtn.setOnClickListener(v -> showJumpDialog());
+
         ImageButton inputPosBtn = this.findViewById(R.id.input_pos);
         inputPosBtn.setOnClickListener(v -> {
             AlertDialog dialog;
@@ -739,6 +780,139 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             Button btnCancel = view.findViewById(R.id.input_position_cancel);
             btnCancel.setOnClickListener(v1 -> dialog.dismiss());
         });
+    }
+
+    /*============================== 跳转经纬度 / 地址 ==============================*/
+
+    /**
+     * 跳转位置：粘贴（或输入）经纬度、地址，直接在地图上选中并跳过去。
+     *
+     * <p>输入的是两个数值时按经纬度处理（默认“经度,纬度”，只有一个数值超过 90 度时自动识别）；
+     * 其余内容当作地址，交给 OpenStreetMap 检索后选中第一条结果。</p>
+     */
+    private void showJumpDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+        builder.setTitle(getResources().getString(R.string.jump_position_title));
+        View view = LayoutInflater.from(MainActivity.this).inflate(R.layout.location_jump, null);
+        builder.setView(view);
+        final AlertDialog dialog = builder.show();
+
+        final EditText input = view.findViewById(R.id.jump_position_input);
+        final RadioButton rbBD = view.findViewById(R.id.jump_type_bd);
+        Button btnPaste = view.findViewById(R.id.jump_position_paste);
+
+        // 剪贴板里如果是经纬度就直接填好，省去手动粘贴
+        String clipboard = getClipboardText();
+        if (clipboard != null && MapUtils.parseLngLat(clipboard) != null) {
+            input.setText(clipboard);
+            input.setSelection(input.getText().length());
+        }
+
+        btnPaste.setOnClickListener(v -> {
+            String text = getClipboardText();
+            if (TextUtils.isEmpty(text)) {
+                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.jump_position_clip_empty));
+                return;
+            }
+            input.setText(text);
+            input.setSelection(input.getText().length());
+        });
+
+        Button btnJump = view.findViewById(R.id.jump_position_ok);
+        btnJump.setOnClickListener(v -> {
+            String text = input.getText().toString().trim();
+            if (TextUtils.isEmpty(text)) {
+                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.jump_position_empty));
+                return;
+            }
+            dialog.dismiss();
+            doJump(text, rbBD.isChecked());
+        });
+
+        Button btnCancel = view.findViewById(R.id.jump_position_cancel);
+        btnCancel.setOnClickListener(v -> dialog.dismiss());
+    }
+
+    /** 读取剪贴板文本，失败或为空时返回 null */
+    private String getClipboardText() {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm == null || !cm.hasPrimaryClip()) {
+                return null;
+            }
+
+            ClipData clipData = cm.getPrimaryClip();
+            if (clipData == null || clipData.getItemCount() <= 0) {
+                return null;
+            }
+
+            CharSequence text = clipData.getItemAt(0).coerceToText(this);
+            return text == null ? null : text.toString().trim();
+        } catch (Exception e) {
+            XLog.e("ERROR: getClipboardText");
+            return null;
+        }
+    }
+
+    /**
+     * 执行跳转：能解析成经纬度就按坐标跳，否则按地址检索
+     *
+     * @param isBd09 经纬度输入是否为 BD-09 坐标系
+     */
+    private void doJump(String text, boolean isBd09) {
+        double[] lngLat = MapUtils.parseLngLat(text);
+
+        if (lngLat != null) {
+            if (isBd09) {
+                jumpToBd09(lngLat[0], lngLat[1], text);
+            } else {
+                double[] bd09 = MapUtils.wgs2bd09(lngLat[0], lngLat[1]);
+                jumpToBd09(bd09[0], bd09[1], text);
+            }
+            GoUtils.DisplayToast(this, getResources().getString(R.string.jump_position_done));
+            return;
+        }
+
+        if (mGeoCoder == null) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.jump_position_fail));
+            return;
+        }
+
+        // 不是经纬度就当成地址去检索
+        GoUtils.DisplayToast(this, getResources().getString(R.string.jump_position_searching));
+        mGeoCoder.search(text, pois -> {
+            if (pois == null || pois.isEmpty()) {
+                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.app_search_null));
+                return;
+            }
+
+            OsmGeocoder.Poi poi = pois.get(0);
+            GeoPoint bd09 = wgs84ToBd09(poi.longitude, poi.latitude);
+            jumpToBd09(bd09.getLongitude(), bd09.getLatitude(), poi.name);
+
+            String name = TextUtils.isEmpty(poi.name) ? poi.address : poi.name;
+            GoUtils.DisplayToast(MainActivity.this,
+                    getResources().getString(R.string.jump_position_result) + name);
+        });
+    }
+
+    /** 把 BD-09 坐标选中并把地图视野移过去（只选点，不传送） */
+    private void jumpToBd09(double bd09Lng, double bd09Lat, String name) {
+        try {
+            if (mMapView == null) {
+                return;
+            }
+
+            mMarkName = TextUtils.isEmpty(name)
+                    ? getResources().getString(R.string.jump_position_default_name) : name;
+            mMarkLatLngMap = new GeoPoint(bd09Lat, bd09Lng);
+            markMap();
+            mMapView.getController().setZoom(18.0);
+            mMapView.getController().animateTo(bd09ToWgs84(bd09Lng, bd09Lat));
+        } catch (Exception e) {
+            XLog.e("ERROR: jumpToBd09");
+            GoUtils.DisplayToast(this, getResources().getString(R.string.jump_position_fail));
+        }
     }
 
     //标定选择的位置
@@ -868,19 +1042,38 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         mButtonStart.setOnClickListener(this::doGoLocation);
     }
 
+    /** 读取设置里的海拔高度，非法输入时退回默认值，避免 NumberFormatException 闪退 */
+    private double getSettingAltitude() {
+        try {
+            return Double.parseDouble(sharedPreferences.getString("setting_altitude", "55.0"));
+        } catch (Exception e) {
+            XLog.e("ERROR: setting_altitude is not a number");
+            return 55.0;
+        }
+    }
+
     private void startGoLocation() {
+        if (mMarkLatLngMap == null) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_location));
+            return;
+        }
+
         Intent serviceGoIntent = new Intent(MainActivity.this, ServiceGo.class);
-        bindService(serviceGoIntent, mConnection, BIND_AUTO_CREATE);    // 绑定服务和活动，之后活动就可以去调服务的方法了
         double[] latLng = MapUtils.bd2wgs(mMarkLatLngMap.getLongitude(), mMarkLatLngMap.getLatitude());
         serviceGoIntent.putExtra(LNG_MSG_ID, latLng[0]);
         serviceGoIntent.putExtra(LAT_MSG_ID, latLng[1]);
-        double alt = Double.parseDouble(sharedPreferences.getString("setting_altitude", "55.0"));
-        serviceGoIntent.putExtra(ALT_MSG_ID, alt);
+        serviceGoIntent.putExtra(ALT_MSG_ID, getSettingAltitude());
 
-        startForegroundService(serviceGoIntent);
-        XLog.d("startForegroundService: ServiceGo");
+        try {
+            bindService(serviceGoIntent, mConnection, BIND_AUTO_CREATE);    // 绑定服务和活动，之后活动就可以去调服务的方法了
+            startForegroundService(serviceGoIntent);
+            XLog.d("startForegroundService: ServiceGo");
 
-        isMockServStart = true;
+            isMockServStart = true;
+        } catch (Exception e) {
+            XLog.e("ERROR: startGoLocation", e);
+            GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_service));
+        }
     }
 
     private void stopGoLocation() {
@@ -914,8 +1107,15 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                         .setAction("Action", null).show();
                 mButtonStart.setImageResource(R.drawable.ic_position);
             } else {
+                if (mServiceBinder == null) {
+                    // 服务还没连接上（例如进程刚被系统重启），重新绑定，避免空指针闪退
+                    bindService(new Intent(MainActivity.this, ServiceGo.class), mConnection, BIND_AUTO_CREATE);
+                    GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_service));
+                    return;
+                }
+
                 double[] latLng = MapUtils.bd2wgs(mMarkLatLngMap.getLongitude(), mMarkLatLngMap.getLatitude());
-                double alt = Double.parseDouble(sharedPreferences.getString("setting_altitude", "55.0"));
+                double alt = getSettingAltitude();
                 mServiceBinder.setPosition(latLng[0], latLng[1], alt);
                 Snackbar.make(v, "已传送到新位置", Snackbar.LENGTH_LONG)
                         .setAction("Action", null).show();
@@ -1002,22 +1202,26 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         final double[] latLng = MapUtils.bd2wgs(lng, lat);
         // 逆地理编码改为 OpenStreetMap Nominatim，传入 WGS-84 坐标
         mGeoCoder.reverse(latLng[1], latLng[0], poi -> {
-            String address = (poi == null || poi.address.isEmpty()) ? null : poi.address;
-            if (address == null) {
-                address = mMarkName != null ? mMarkName
-                        : getResources().getString(R.string.history_location_default_name);
+            try {
+                String address = (poi == null || poi.address.isEmpty()) ? null : poi.address;
+                if (address == null) {
+                    address = mMarkName != null ? mMarkName
+                            : getResources().getString(R.string.history_location_default_name);
+                }
+
+                //插表参数
+                ContentValues contentValues = new ContentValues();
+                contentValues.put(DataBaseHistoryLocation.DB_COLUMN_LOCATION, address);
+                contentValues.put(DataBaseHistoryLocation.DB_COLUMN_LONGITUDE_WGS84, String.valueOf(latLng[0]));
+                contentValues.put(DataBaseHistoryLocation.DB_COLUMN_LATITUDE_WGS84, String.valueOf(latLng[1]));
+                contentValues.put(DataBaseHistoryLocation.DB_COLUMN_TIMESTAMP, System.currentTimeMillis() / 1000);
+                contentValues.put(DataBaseHistoryLocation.DB_COLUMN_LONGITUDE_CUSTOM, Double.toString(lng));
+                contentValues.put(DataBaseHistoryLocation.DB_COLUMN_LATITUDE_CUSTOM, Double.toString(lat));
+
+                DataBaseHistoryLocation.saveHistoryLocation(mLocationHistoryDB, contentValues);
+            } catch (Exception e) {
+                XLog.e("ERROR: recordCurrentLocation");
             }
-
-            //插表参数
-            ContentValues contentValues = new ContentValues();
-            contentValues.put(DataBaseHistoryLocation.DB_COLUMN_LOCATION, address);
-            contentValues.put(DataBaseHistoryLocation.DB_COLUMN_LONGITUDE_WGS84, String.valueOf(latLng[0]));
-            contentValues.put(DataBaseHistoryLocation.DB_COLUMN_LATITUDE_WGS84, String.valueOf(latLng[1]));
-            contentValues.put(DataBaseHistoryLocation.DB_COLUMN_TIMESTAMP, System.currentTimeMillis() / 1000);
-            contentValues.put(DataBaseHistoryLocation.DB_COLUMN_LONGITUDE_CUSTOM, Double.toString(lng));
-            contentValues.put(DataBaseHistoryLocation.DB_COLUMN_LATITUDE_CUSTOM, Double.toString(lat));
-
-            DataBaseHistoryLocation.saveHistoryLocation(mLocationHistoryDB, contentValues);
         });
     }
 

@@ -29,7 +29,8 @@
     <string name="app_error_read">请依次阅读并接受\n《用户协议》和《隐私政策》</string>
     <string name="app_error_gps">定位不可用，请检查 GPS 是否开启</string>
     <string name="app_error_network">网络不可用，请检查网络连接</string>
-    <string name="app_error_permission">权限不足，请授予相关权限</string>
+    <string name="app_error_permission">权限不足，请在系统设置中授予定位权限</string>
+    <string name="app_error_service">模拟位置服务启动失败，请重试或重启应用</string>
     <string name="app_error_input">输入有误，请检查输入是否合法</string>
     <string name="app_error_input_null">输入不能为空，请重新输入内容</string>
     <string name="app_error_search">查找失败，请检查网络或定位</string>
@@ -46,6 +47,22 @@
     <string name="app_location_ok">位置已传送</string>
     <string name="app_location_copy">位置已复制到剪切板</string>
     <string name="app_location_save">位置已保存</string>
+
+    <!-- 跳转经纬度 / 地址 -->
+    <string name="jump_button">跳转位置</string>
+    <string name="jump_position_title">跳转经纬度 / 地址</string>
+    <string name="jump_position_hint">粘贴或输入经纬度（经度,纬度）或地址</string>
+    <string name="jump_position_paste">粘贴</string>
+    <string name="jump_position_ok">跳转</string>
+    <string name="jump_position_cancel">取消</string>
+    <string name="jump_position_tips">坐标顺序默认为“经度,纬度”，只识别为地址时自动检索</string>
+    <string name="jump_position_empty">请输入经纬度或地址</string>
+    <string name="jump_position_clip_empty">剪贴板为空</string>
+    <string name="jump_position_searching">正在检索地址…</string>
+    <string name="jump_position_result">已跳转到：</string>
+    <string name="jump_position_done">已跳转到该坐标</string>
+    <string name="jump_position_default_name">跳转的位置</string>
+    <string name="jump_position_fail">跳转失败，请检查输入内容</string>
 
     <!-- 欢迎页 -->
     <string name="welcome_btn_txt">进入应用</string>

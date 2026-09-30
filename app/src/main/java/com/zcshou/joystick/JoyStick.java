@@ -620,7 +620,11 @@ public class JoyStick extends View {
 
         // 清除选点
         if (mMarkMarker != null) {
-            mMarkMarker.setPosition(null);
+            try {
+                mMarkMarker.setPosition(null);
+            } catch (Exception e) {
+                Log.e("JOYSTICK", "ERROR - clear mark");
+            }
         }
 
         if (mCurMapLngLat != null) {

@@ -20,6 +20,9 @@
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
 
+# 保留文件名与行号信息：release 包闪退时日志里的堆栈才是可读的真实行号
+-keepattributes SourceFile,LineNumberTable
+
 # osmdroid 瓦片地图引擎
 -dontwarn org.osmdroid.**
 -keep class org.osmdroid.tileprovider.modules.** { *; }

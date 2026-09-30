@@ -79,7 +79,9 @@ public class HistoryActivity extends BaseActivity {
 
     @Override
     protected void onDestroy() {
-        mHistoryLocationDB.close();
+        if (mHistoryLocationDB != null) {
+            mHistoryLocationDB.close();
+        }
         super.onDestroy();
     }
 

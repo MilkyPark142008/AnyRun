@@ -2,57 +2,36 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Android Q 新增的权限。允许用户授予对两个不同范围的位置访问权限：在使用中（仅限前景）或始终（前景和后台） -->
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
-    <!-- 允许一个程序访问CellID或WiFi热点来获取粗略的位置 -->
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <!-- 通过GPS得到精确位置 -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <!-- 允许程序访问Wi-Fi网络状态信息 -->
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <!-- 允许程序访问有关GSM网络信息 -->
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- 允许程序改变Wi-Fi连接状态 -->
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
-
-    <uses-permission android:name="android.permission.REPLACE_EXISTING_PACKAGE"/>
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
-
-    <!-- 允许程序打开网络套接字 -->
+    <!-- 网络：地图瓦片、地址检索（OSM Nominatim）、版本检查与下载 -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- 允许挂载和反挂载文件系统可移动存储 -->
-    <uses-permission
-        android:name="android.permission.MOUNT_UNMOUNT_FILESYSTEMS"
-        tools:ignore="ProtectedPermissions" />
-    <!-- 允许程序读取底层系统日志文件 -->
-    <uses-permission
-        android:name="android.permission.READ_LOGS"
-        tools:ignore="ProtectedPermissions" />
-    <!-- 允许访问振动设备 -->
-    <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- 允许使用PowerManager的 WakeLocks保持进程在休眠时从屏幕消失 -->
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- 允许程序读取或写入系统设置 -->
-    <uses-permission
-        android:name="android.permission.WRITE_SETTINGS"
-        tools:ignore="ProtectedPermissions" />
-    <!-- 允许程序创建模拟位置提供用于测试 -->
+    <!-- 判断当前网络类型（用于 Wi-Fi 会导致定位闪回的提示） -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- 定位：地图定位图层、以及“跳转到经纬度/地址”后把视野移到该点 -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- 前台服务：模拟位置需要常驻运行 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 13+ 的前台服务通知（显示的摇杆按钮就挂在通知上），拒绝也不影响模拟位置 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- 悬浮窗：摇杆 / 摇杆地图 / 历史记录悬浮窗 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- 模拟位置：需要在开发者选项中把本应用选为“模拟位置信息应用” -->
     <uses-permission
         android:name="android.permission.ACCESS_MOCK_LOCATION"
         tools:ignore="MockLocation,ProtectedPermissions" />
-    <!-- 允许一个程序打开窗口使用 TYPE_SYSTEM_ALERT，显示在其他所有程序的顶层 -->
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- 应用内更新：下载 APK 后拉起系统安装器 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".GoApplication"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:launchMode="singleInstance"
-        android:requestLegacyExternalStorage="true"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">

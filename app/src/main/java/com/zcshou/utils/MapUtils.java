@@ -1,5 +1,11 @@
 package com.zcshou.utils;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 public class MapUtils {
 //    public final static String COORDINATE_TYPE_GCJ02 = "gcj02";
 //    public final static String COORDINATE_TYPE_BD09LL = "bd09ll";
@@ -87,6 +93,113 @@ public class MapUtils {
         return ret;
     }
     
+    /*============================== 经纬度文本解析 ==============================*/
+    /** 匹配整数 / 小数坐标 */
+    private static final Pattern NUMBER_PATTERN = Pattern.compile("-?\\d+(?:\\.\\d+)?");
+    private static final String[] LNG_LABELS = {"经度", "lng", "lon", "longitude"};
+    private static final String[] LAT_LABELS = {"纬度", "lat", "latitude"};
+
+    /**
+     * 解析用户粘贴或输入的经纬度文本，统一按“经度,纬度”返回。
+     *
+     * <p>支持的写法：</p>
+     * <ul>
+     *     <li>{@code 116.397,39.908} / {@code 116.397 39.908} / {@code 116.397，39.908}</li>
+     *     <li>{@code 经度:116.397 纬度:39.908} / {@code lat=39.908&lng=116.397}</li>
+     *     <li>{@code 39.908,116.397}（其中一个数值绝对值大于 90 时自动识别为经度）</li>
+     * </ul>
+     *
+     * @return {经度, 纬度}；解析不出来（例如是一段地址）时返回 null
+     */
+    public static double[] parseLngLat(String text) {
+        if (text == null) {
+            return null;
+        }
+
+        // 全角字符统一成半角，并去掉常见的包裹字符
+        String normalized = text.trim()
+                .replace('，', ',')
+                .replace('：', ':')
+                .replace('；', ',')
+                .replace('（', ' ')
+                .replace('）', ' ')
+                .replace('【', ' ')
+                .replace('】', ' ');
+        if (normalized.isEmpty()) {
+            return null;
+        }
+
+        Double labelLng = findNumberAfterLabel(normalized, LNG_LABELS);
+        Double labelLat = findNumberAfterLabel(normalized, LAT_LABELS);
+        if (labelLng != null && labelLat != null && isValidLngLat(labelLng, labelLat)) {
+            return new double[] {labelLng, labelLat};
+        }
+
+        List<Double> numbers = new ArrayList<>();
+        Matcher matcher = NUMBER_PATTERN.matcher(normalized);
+        while (numbers.size() < 2 && matcher.find()) {
+            try {
+                numbers.add(Double.parseDouble(matcher.group()));
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        if (numbers.size() < 2) {
+            return null;
+        }
+
+        double first = numbers.get(0);
+        double second = numbers.get(1);
+
+        // 纬度的绝对值不会超过 90，所以超过 90 的那个一定是经度
+        if (Math.abs(first) > 90.0 && Math.abs(second) <= 90.0) {
+            return new double[] {first, second};
+        }
+        if (Math.abs(second) > 90.0 && Math.abs(first) <= 90.0) {
+            return new double[] {second, first};
+        }
+
+        // 默认按“经度,纬度”，不合法时再反过来试一次
+        if (isValidLngLat(first, second)) {
+            return new double[] {first, second};
+        }
+        if (isValidLngLat(second, first)) {
+            return new double[] {second, first};
+        }
+
+        return null;
+    }
+
+    private static boolean isValidLngLat(double lng, double lat) {
+        return !Double.isNaN(lng) && !Double.isNaN(lat)
+                && Math.abs(lng) <= 180.0 && Math.abs(lat) <= 90.0;
+    }
+
+    /** 取标签（经度 / lng / 纬度 / lat ...）之后出现的第一个数值 */
+    private static Double findNumberAfterLabel(String text, String[] labels) {
+        String lower = text.toLowerCase(Locale.US);
+
+        for (String label : labels) {
+            int index = lower.indexOf(label);
+            if (index < 0) {
+                continue;
+            }
+
+            Matcher matcher = NUMBER_PATTERN.matcher(text);
+            while (matcher.find()) {
+                if (matcher.start() >= index + label.length()) {
+                    try {
+                        return Double.parseDouble(matcher.group());
+                    } catch (NumberFormatException e) {
+                        return null;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
 //    private static boolean out_of_china(double lng, double lat) {
 //        return (lng < 72.004 || lng > 137.8347) || ((lat < 0.8293 || lat > 55.8271));
 //    }

@@ -6,6 +6,7 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
@@ -80,19 +81,35 @@ public class WelcomeActivity extends AppCompatActivity {
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         if (requestCode == SDK_PERMISSION_REQUEST) {
-            for (int i = 0; i < ReqPermissions.size(); i++) {
-                if (grantResults[i] != PackageManager.PERMISSION_GRANTED) {
-                    GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_permission));
-                    return;
-                }
+            // 只有定位属于必要权限，通知等权限被拒绝不应该阻塞进入应用；
+            // 这里也不再按下标访问 grantResults（顺序不保证，被系统直接拒绝时还可能为空）
+            if (hasLocationPermission()) {
+                isPermission = true;
+            } else {
+                isPermission = false;
+                GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_permission));
+                GoUtils.showPermissionSettingsDialog(this, getResources().getString(R.string.app_error_permission));
             }
-            isPermission = true;
         }
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
     }
 
+    /** 是否已获得定位权限（精确 / 粗略任意一个即可） */
+    private boolean hasLocationPermission() {
+        return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
     private void checkDefaultPermissions() {
-        // 定位精确位置
+        // 注意：ReqPermissions 是静态集合，每次申请前必须清空，否则会不断累加
+        ReqPermissions.clear();
+
+        /*
+         * 只申请必要权限：
+         * 1. 定位：地图定位图层、“跳转经纬度/地址”后把视野移到该点都需要；
+         * 2. 通知（Android 13+）：前台服务通知上挂着“显示摇杆/隐藏摇杆”，属于可选权限，拒绝不阻塞。
+         * 存储、电话状态、读取日志等权限本应用用不到，已从清单中移除。
+         */
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             ReqPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
         }
@@ -101,18 +118,12 @@ public class WelcomeActivity extends AppCompatActivity {
             ReqPermissions.add(Manifest.permission.ACCESS_COARSE_LOCATION);
         }
 
-        /*
-         * 读写权限和电话状态权限非必要权限(建议授予)只会申请一次，用户同意或者禁止，只会弹一次
-         */
-        // 读写权限
-        if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-            ReqPermissions.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            ReqPermissions.add(Manifest.permission.POST_NOTIFICATIONS);
         }
 
-        // 读取电话状态权限
-        if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
-            ReqPermissions.add(Manifest.permission.READ_PHONE_STATE);
-        }
+        isPermission = hasLocationPermission();
 
         if (ReqPermissions.isEmpty()) {
             isPermission = true;
@@ -137,7 +148,8 @@ public class WelcomeActivity extends AppCompatActivity {
             return;
         }
 
-        if (isPermission) {
+        if (isPermission || hasLocationPermission()) {
+            isPermission = true;
             Intent intent = new Intent(WelcomeActivity.this, MainActivity.class);
             startActivity(intent);
             WelcomeActivity.this.finish();

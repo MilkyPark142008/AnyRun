@@ -49,8 +49,14 @@ public class GoUtils {
     }
 
     public static boolean isWifiEnabled(Context context) {
-        WifiManager wifiManager = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
-        return wifiManager.isWifiEnabled();
+        try {
+            WifiManager wifiManager = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
+            return wifiManager != null && wifiManager.isWifiEnabled();
+        } catch (Exception e) {
+            // 个别 ROM 上取 Wi-Fi 状态会抛 SecurityException，这里不应影响主流程
+            e.printStackTrace();
+            return false;
+        }
     }
 
     //MOBILE网络是否可用
@@ -82,27 +88,28 @@ public class GoUtils {
 
     //判断GPS是否打开
     public static  boolean isGpsOpened(Context context) {
-        LocationManager locationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
-        return locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER);
+        try {
+            LocationManager locationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
+            return locationManager != null && locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
     }
 
     // 判断是否已在开发者选项中开启模拟位置权限（注意下面临时添加 @SuppressLint("wrongconstant") 以处理 addTestProvider 参数值的 lint 错误）
     @SuppressLint("wrongconstant")
     public static boolean isAllowMockLocation(Context context) {
         boolean canMockPosition = false;
-        int index;
+
+        LocationManager locationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);//获得LocationManager引用
+        if (locationManager == null) {
+            return false;
+        }
 
         try {
-            LocationManager locationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);//获得LocationManager引用
-
-            List<String> list = locationManager.getAllProviders();
-            for (index = 0; index < list.size(); index++) {
-                if (list.get(index).equals(LocationManager.GPS_PROVIDER)) {
-                    break;
-                }
-            }
-
-            if (index < list.size()) {
+            if (locationManager.getAllProviders() != null
+                    && locationManager.getAllProviders().contains(LocationManager.GPS_PROVIDER)) {
                 // 注意，由于 android api 问题，下面的参数会提示错误(以下参数是通过相关API获取的真实GPS参数，不是随便写的)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     locationManager.addTestProvider(LocationManager.GPS_PROVIDER, false, true, false,
@@ -113,15 +120,21 @@ public class GoUtils {
                 }
                 canMockPosition = true;
             }
+        } catch (Exception e) {
+            // 没有勾选“模拟位置信息应用”时 addTestProvider 会抛 SecurityException
+            e.printStackTrace();
+            canMockPosition = false;
+        }
 
-            // 模拟位置可用
-            if (canMockPosition) {
-                // remove test provider
+        // 模拟位置可用：无论清理测试提供者是否成功，“可用”这个结论都不应该被推翻
+        if (canMockPosition) {
+            try {
                 locationManager.setTestProviderEnabled(LocationManager.GPS_PROVIDER, false);
                 locationManager.removeTestProvider(LocationManager.GPS_PROVIDER);
+            } catch (Exception e) {
+                // 部分 ROM 在这里会抛异常，忽略即可
+                e.printStackTrace();
             }
-        } catch (SecurityException e) {
-            e.printStackTrace();
         }
 
         return canMockPosition;
@@ -213,6 +226,26 @@ public class GoUtils {
                 })
                 .setNegativeButton("取消", (dialog, which) -> {
 
+                })
+                .show();
+    }
+
+    // 权限被拒绝后引导用户去应用详情页手动开启
+    public static void showPermissionSettingsDialog(Context context, String message) {
+        new AlertDialog.Builder(context)
+                .setTitle("权限不足")
+                .setMessage(message)
+                .setPositiveButton("去设置", (dialog, which) -> {
+                    try {
+                        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:" + context.getPackageName()));
+                        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        context.startActivity(intent);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                })
+                .setNegativeButton("取消", (dialog, which) -> {
                 })
                 .show();
     }
