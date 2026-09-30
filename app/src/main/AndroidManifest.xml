@@ -85,16 +85,25 @@
             android:exported="false" />
 
         <!-- 脚本模式：列表 + 编辑 -->
+        <!--
+            这两个页面自带 Toolbar 并调用 setSupportActionBar，必须使用 NoActionBar 主题。
+            默认的 AppTheme 继承自 Theme.AppCompat.Light.DarkActionBar（windowActionBar=true），
+            主题已经提供了窗口 ActionBar，此时再调用 setSupportActionBar 会抛
+            IllegalStateException: This Activity already has an action bar supplied by the window decor
+            （表现为“打开脚本模式直接闪退”）。MainActivity / WelcomeActivity 同理使用 NoActionBar。
+        -->
         <activity
             android:name=".ScriptActivity"
             android:label="@string/script_title"
             android:parentActivityName=".MainActivity"
+            android:theme="@style/AppTheme.NoActionBar"
             android:exported="false" />
 
         <activity
             android:name=".ScriptEditActivity"
             android:label="@string/script_edit_title"
             android:parentActivityName=".ScriptActivity"
+            android:theme="@style/AppTheme.NoActionBar"
             android:windowSoftInputMode="adjustResize"
             android:exported="false" />
 
