@@ -6,6 +6,7 @@ import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.graphics.PixelFormat;
+import android.graphics.drawable.Drawable;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -22,24 +23,25 @@ import android.widget.SimpleAdapter;
 import android.widget.TextView;
 import android.widget.SearchView;
 
+import androidx.core.content.ContextCompat;
 import androidx.preference.PreferenceManager;
 
-import com.baidu.mapapi.map.BaiduMap;
-import com.baidu.mapapi.map.MapPoi;
-import com.baidu.mapapi.map.MapStatus;
-import com.baidu.mapapi.map.MapStatusUpdateFactory;
-import com.baidu.mapapi.map.MapView;
-import com.baidu.mapapi.map.MarkerOptions;
-import com.baidu.mapapi.map.MyLocationData;
-import com.baidu.mapapi.model.LatLng;
-import com.baidu.mapapi.search.sug.SuggestionSearch;
-import com.baidu.mapapi.search.sug.SuggestionSearchOption;
+import org.osmdroid.events.MapEventsReceiver;
+import org.osmdroid.util.GeoPoint;
+import org.osmdroid.views.MapView;
+import org.osmdroid.views.overlay.MapEventsOverlay;
+import org.osmdroid.views.overlay.Marker;
+
 import com.zcshou.database.DataBaseHistoryLocation;
 import com.zcshou.gogogo.HistoryActivity;
 import com.zcshou.gogogo.MainActivity;
 import com.zcshou.gogogo.R;
 import com.zcshou.utils.GoUtils;
 import com.zcshou.utils.MapUtils;
+import com.zcshou.utils.OsmGeocoder;
+import com.zcshou.utils.TileSourceUtils;
+
+import okhttp3.OkHttpClient;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -86,10 +88,13 @@ public class JoyStick extends View {
     /* 地图悬浮窗相关 */
     private FrameLayout mMapLayout;
     private MapView mMapView;
-    private BaiduMap mBaiduMap;
-    private LatLng mCurMapLngLat;
-    private LatLng mMarkMapLngLat;
-    private SuggestionSearch mSuggestionSearch;
+    /** 当前位置，BD-09（保持原工程内部坐标语义，绘制时转 WGS-84） */
+    private GeoPoint mCurMapLngLat;
+    /** 当前选点，BD-09 */
+    private GeoPoint mMarkMapLngLat;
+    private Marker mCurMarker;
+    private Marker mMarkMarker;
+    private OsmGeocoder mGeoCoder;
     private ListView mSearchList;
     private LinearLayout mSearchLayout;
 
@@ -152,10 +157,10 @@ public class JoyStick extends View {
 
     public void setCurrentPosition(double lng, double lat, double alt) {
         double[] lngLat = MapUtils.wgs2bd09(lng, lat);
-        mCurMapLngLat = new LatLng(lngLat[1], lngLat[0]);
+        mCurMapLngLat = new GeoPoint(lngLat[1], lngLat[0]);
         mAltitude = alt;
 
-        resetBaiduMap();
+        resetMap();
     }
 
     public void show() {
@@ -168,7 +173,7 @@ public class JoyStick extends View {
                     mWindowManager.removeView(mHistoryLayout);
                 }
                 if (mMapLayout.getParent() == null) {
-                    resetBaiduMap();
+                    resetMap();
                     mWindowManager.addView(mMapLayout, mWindowParamCurrent);
                 }
                 break;
@@ -224,8 +229,9 @@ public class JoyStick extends View {
             mWindowManager.removeViewImmediate(mHistoryLayout);
         }
 
-        mBaiduMap.setMyLocationEnabled(false);
-        mMapView.onDestroy();
+        if (mMapView != null) {
+            mMapView.onDetach();
+        }
     }
 
     public void setListener(JoyStickClickListener mListener) {
@@ -438,43 +444,14 @@ public class JoyStick extends View {
 
         mSearchList = mMapLayout.findViewById(R.id.map_search_list_view);
         mSearchLayout = mMapLayout.findViewById(R.id.map_search_linear);
-        mSuggestionSearch = SuggestionSearch.newInstance();
-        mSuggestionSearch.setOnGetSuggestionResultListener(suggestionResult -> {
-            if (suggestionResult == null || suggestionResult.getAllSuggestions() == null) {
-                GoUtils.DisplayToast(mContext,getResources().getString(R.string.app_search_null));
-            } else {
-                List<Map<String, Object>> data = new ArrayList<>();
-                int retCnt = suggestionResult.getAllSuggestions().size();
-
-                for (int i = 0; i < retCnt; i++) {
-                    if (suggestionResult.getAllSuggestions().get(i).pt == null) {
-                        continue;
-                    }
-
-                    Map<String, Object> poiItem = new HashMap<>();
-                    poiItem.put(MainActivity.POI_NAME, suggestionResult.getAllSuggestions().get(i).key);
-                    poiItem.put(MainActivity.POI_ADDRESS, suggestionResult.getAllSuggestions().get(i).city + " " + suggestionResult.getAllSuggestions().get(i).district);
-                    poiItem.put(MainActivity.POI_LONGITUDE, "" + suggestionResult.getAllSuggestions().get(i).pt.longitude);
-                    poiItem.put(MainActivity.POI_LATITUDE, "" + suggestionResult.getAllSuggestions().get(i).pt.latitude);
-                    data.add(poiItem);
-                }
-
-                SimpleAdapter simAdapt = new SimpleAdapter(
-                        mContext,
-                        data,
-                        R.layout.search_poi_item,
-                        new String[] {MainActivity.POI_NAME, MainActivity.POI_ADDRESS, MainActivity.POI_LONGITUDE, MainActivity.POI_LATITUDE}, // 与下面数组元素要一一对应
-                        new int[] {R.id.poi_name, R.id.poi_address, R.id.poi_longitude, R.id.poi_latitude});
-                mSearchList.setAdapter(simAdapt);
-                mSearchLayout.setVisibility(View.VISIBLE);
-            }
-        });
+        // 地点检索改用 OpenStreetMap Nominatim（替代百度 SuggestionSearch）
+        mGeoCoder = new OsmGeocoder(new OkHttpClient());
         mSearchList.setOnItemClickListener((parent, view, position, id) -> {
             mSearchLayout.setVisibility(View.GONE);
 
             String lng = ((TextView) view.findViewById(R.id.poi_longitude)).getText().toString();
             String lat = ((TextView) view.findViewById(R.id.poi_latitude)).getText().toString();
-            markBaiduMap(new LatLng(Double.parseDouble(lat), Double.parseDouble(lng)));
+            markMap(new GeoPoint(Double.parseDouble(lat), Double.parseDouble(lng)));
         });
 
         TextView tips = mMapLayout.findViewById(R.id.joystick_map_tips);
@@ -508,10 +485,7 @@ public class JoyStick extends View {
             public boolean onQueryTextChange(String newText) {
                 if (newText != null && newText.length() > 0) {
                     try {
-                        mSuggestionSearch.requestSuggestion((new SuggestionSearchOption())
-                                .keyword(newText)
-                                .city(MainActivity.mCurrentCity)
-                        );
+                        doSearch(newText);
                     } catch (Exception e) {
                         GoUtils.DisplayToast(mContext,getResources().getString(R.string.app_error_search));
                         e.printStackTrace();
@@ -543,10 +517,10 @@ public class JoyStick extends View {
                     mCurMapLngLat = mMarkMapLngLat;
                     mMarkMapLngLat = null;
 
-                    double[] lngLat = MapUtils.bd2wgs(mCurMapLngLat.longitude, mCurMapLngLat.latitude);
+                    double[] lngLat = MapUtils.bd2wgs(mCurMapLngLat.getLongitude(), mCurMapLngLat.getLatitude());
                     mListener.onPositionInfo(lngLat[0], lngLat[1], mAltitude);
 
-                    resetBaiduMap();
+                    resetMap();
 
                     GoUtils.DisplayToast(mContext, getResources().getString(R.string.app_location_ok));
                 }
@@ -571,86 +545,160 @@ public class JoyStick extends View {
         });
 
         ImageButton btnBack = mMapLayout.findViewById(R.id.btnBack);
-        btnBack.setOnClickListener(v -> resetBaiduMap());
+        btnBack.setOnClickListener(v -> resetMap());
         btnBack.setColorFilter(getResources().getColor(R.color.colorAccent, mContext.getTheme()));
 
-        initBaiduMap();
+        initOsmMap();
     }
 
-    private void initBaiduMap() {
+    private void initOsmMap() {
         mMapView = mMapLayout.findViewById(R.id.map_joystick);
-        mMapView.showZoomControls(false);
-        mBaiduMap = mMapView.getMap();
-        mBaiduMap.setMapType(BaiduMap.MAP_TYPE_NORMAL);
-        mBaiduMap.setMyLocationEnabled(true);
+        mMapView.setBuiltInZoomControls(false);
+        mMapView.setMultiTouchControls(true);
+        mMapView.setTilesScaledToDpi(true);
+        // 默认使用 OpenStreetMap，与主界面保持一致
+        mMapView.setTileSource(TileSourceUtils.OSM_STANDARD);
+        mMapView.getController().setZoom(18.0);
 
-        mBaiduMap.setOnMapTouchListener(event -> {
+        // 当前位置标记：对应原实现里通过 setMyLocationData 显示的“我的位置”
+        mCurMarker = createMarker(ContextCompat.getDrawable(mContext, R.drawable.ic_home_position), 0.5f);
+        if (mCurMarker != null) {
+            mMapView.getOverlays().add(mCurMarker);
+        }
 
-        });
+        // 选点标记
+        mMarkMarker = createMarker(ContextCompat.getDrawable(mContext, MainActivity.MAP_INDICATOR_RES), 1.0f);
+        if (mMarkMarker != null) {
+            mMapView.getOverlays().add(mMarkMarker);
+        }
 
-        mBaiduMap.setOnMapClickListener(new BaiduMap.OnMapClickListener() {
+        // 地图单击 / 长按（回调坐标为 WGS-84）。双击缩放由 osmdroid 内置处理。
+        mMapView.getOverlays().add(new MapEventsOverlay(new MapEventsReceiver() {
             /**
              * 单击地图
              */
             @Override
-            public void onMapClick(LatLng point) {
-                markBaiduMap(point);
+            public boolean singleTapConfirmedHelper(GeoPoint p) {
+                markMap(wgs84ToBd09(p.getLongitude(), p.getLatitude()));
+                return true;
             }
 
-            /**
-             * 单击地图中的POI点
-             */
-            @Override
-            public void onMapPoiClick(MapPoi poi) {
-                markBaiduMap(poi.getPosition());
-            }
-        });
-
-        mBaiduMap.setOnMapLongClickListener(new BaiduMap.OnMapLongClickListener() {
             /**
              * 长按地图
              */
             @Override
-            public void onMapLongClick(LatLng point) {
-                markBaiduMap(point);
+            public boolean longPressHelper(GeoPoint p) {
+                markMap(wgs84ToBd09(p.getLongitude(), p.getLatitude()));
+                return true;
             }
-        });
-
-        mBaiduMap.setOnMapDoubleClickListener(new BaiduMap.OnMapDoubleClickListener() {
-            /**
-             * 双击地图
-             */
-            @Override
-            public void onMapDoubleClick(LatLng point) {
-                markBaiduMap(point);
-            }
-        });
+        }));
     }
 
-    private void resetBaiduMap() {
-        mBaiduMap.clear();
-
-        MyLocationData locData = new MyLocationData.Builder()
-                .latitude(mCurMapLngLat.latitude)
-                .longitude(mCurMapLngLat.longitude)
-                .build();
-        mBaiduMap.setMyLocationData(locData);
-
-        MapStatus.Builder builder = new MapStatus.Builder();
-        builder.target(mCurMapLngLat).zoom(18.0f);
-        mBaiduMap.animateMapStatus(MapStatusUpdateFactory.newMapStatus(builder.build()));
+    /**
+     * 创建地图标记。osmdroid 的 Marker 需要各自持有一份 Drawable，所以每次从 ConstantState 新建。
+     *
+     * @param anchorV 图标垂直锚点，1.0f 表示图标底部对准坐标（图钉样式）
+     */
+    private Marker createMarker(Drawable drawable, float anchorV) {
+        if (mMapView == null || drawable == null) {
+            return null;
+        }
+        Drawable icon = drawable;
+        if (drawable.getConstantState() != null) {
+            icon = drawable.getConstantState().newDrawable();
+        }
+        Marker marker = new Marker(mMapView);
+        marker.setIcon(icon);
+        marker.setAnchor(0.5f, anchorV);
+        return marker;
     }
 
-    private void markBaiduMap(LatLng latLng) {
-        mMarkMapLngLat = latLng;
+    private void resetMap() {
+        if (mMapView == null) {
+            return;
+        }
 
-        MarkerOptions ooA = new MarkerOptions().position(latLng).icon(MainActivity.mMapIndicator);
-        mBaiduMap.clear();
-        mBaiduMap.addOverlay(ooA);
+        // 清除选点
+        if (mMarkMarker != null) {
+            mMarkMarker.setPosition(null);
+        }
 
-        MapStatus.Builder builder = new MapStatus.Builder();
-        builder.target(latLng).zoom(18.0f);
-        mBaiduMap.animateMapStatus(MapStatusUpdateFactory.newMapStatus(builder.build()));
+        if (mCurMapLngLat != null) {
+            GeoPoint wgs84 = bd09ToWgs84(mCurMapLngLat);
+            if (mCurMarker != null) {
+                mCurMarker.setPosition(wgs84);
+            }
+            mMapView.getController().setZoom(18.0);
+            mMapView.getController().animateTo(wgs84);
+        }
+
+        mMapView.invalidate();
+    }
+
+    private void markMap(GeoPoint bd09Point) {
+        if (mMapView == null || bd09Point == null) {
+            return;
+        }
+
+        mMarkMapLngLat = bd09Point;
+        GeoPoint wgs84 = bd09ToWgs84(bd09Point);
+
+        if (mMarkMarker != null) {
+            mMarkMarker.setPosition(wgs84);
+        }
+
+        mMapView.getController().setZoom(18.0);
+        mMapView.getController().animateTo(wgs84);
+        mMapView.invalidate();
+    }
+
+    /**
+     * BD-09 -> WGS-84（osmdroid 的瓦片是 WGS-84）
+     */
+    private static GeoPoint bd09ToWgs84(GeoPoint bd09) {
+        double[] wgs84 = MapUtils.bd2wgs(bd09.getLongitude(), bd09.getLatitude());
+        return new GeoPoint(wgs84[1], wgs84[0]);
+    }
+
+    /**
+     * WGS-84 -> BD-09（保持工程内部原有的坐标语义）
+     */
+    private static GeoPoint wgs84ToBd09(double lng, double lat) {
+        double[] bd09 = MapUtils.wgs2bd09(lng, lat);
+        return new GeoPoint(bd09[1], bd09[0]);
+    }
+
+    /**
+     * 关键字检索（OpenStreetMap Nominatim），结果统一转成 BD-09 后再填入列表
+     */
+    private void doSearch(String keyword) {
+        mGeoCoder.search(keyword, pois -> {
+            if (pois == null || pois.isEmpty()) {
+                GoUtils.DisplayToast(mContext, getResources().getString(R.string.app_search_null));
+                return;
+            }
+
+            List<Map<String, Object>> data = new ArrayList<>();
+            for (OsmGeocoder.Poi poi : pois) {
+                double[] bd09 = MapUtils.wgs2bd09(poi.longitude, poi.latitude);
+
+                Map<String, Object> poiItem = new HashMap<>();
+                poiItem.put(MainActivity.POI_NAME, poi.name);
+                poiItem.put(MainActivity.POI_ADDRESS, poi.address);
+                poiItem.put(MainActivity.POI_LONGITUDE, "" + bd09[0]);
+                poiItem.put(MainActivity.POI_LATITUDE, "" + bd09[1]);
+                data.add(poiItem);
+            }
+
+            SimpleAdapter simAdapt = new SimpleAdapter(
+                    mContext,
+                    data,
+                    R.layout.search_poi_item,
+                    new String[] {MainActivity.POI_NAME, MainActivity.POI_ADDRESS, MainActivity.POI_LONGITUDE, MainActivity.POI_LATITUDE}, // 与下面数组元素要一一对应
+                    new int[] {R.id.poi_name, R.id.poi_address, R.id.poi_longitude, R.id.poi_latitude});
+            mSearchList.setAdapter(simAdapt);
+            mSearchLayout.setVisibility(View.VISIBLE);
+        });
     }
 
 
@@ -737,7 +785,7 @@ public class JoyStick extends View {
             String[] bdLatLngStr = bdLatLng.split(" ");
             String bdLongitude = bdLatLngStr[0].substring(bdLatLngStr[0].indexOf(':') + 1);
             String bdLatitude = bdLatLngStr[1].substring(bdLatLngStr[1].indexOf(':') + 1);
-            mCurMapLngLat = new LatLng(Double.parseDouble(bdLatitude), Double.parseDouble(bdLongitude));
+            mCurMapLngLat = new GeoPoint(Double.parseDouble(bdLatitude), Double.parseDouble(bdLongitude));
 
             GoUtils.DisplayToast(mContext, getResources().getString(R.string.app_location_ok));
         });

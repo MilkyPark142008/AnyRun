@@ -61,13 +61,6 @@
             android:name="org.apache.http.legacy"
             android:required="false" />
 
-        <!-- 百度地图 间隔定位必须配置此service否则功能无效 -->
-        <service
-            android:name="com.baidu.location.f"
-            android:enabled="true"
-            android:exported="false"
-            android:process=":remote" />
-
         <service
             android:exported="false"
             android:name="com.zcshou.service.ServiceGo" />

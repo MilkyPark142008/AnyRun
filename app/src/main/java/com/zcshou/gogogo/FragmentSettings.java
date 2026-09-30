@@ -9,7 +9,6 @@ import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.SwitchPreferenceCompat;
 
-import com.baidu.mapapi.SDKInitializer;
 import com.elvishew.xlog.XLog;
 import com.zcshou.utils.GoUtils;
 

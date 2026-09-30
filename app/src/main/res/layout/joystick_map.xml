@@ -42,11 +42,11 @@
         android:layout_width="match_parent"
         android:layout_height="450dp">
 
-        <com.baidu.mapapi.map.MapView
+        <org.osmdroid.views.MapView
             android:id="@+id/map_joystick"
             android:layout_width="match_parent"
             android:layout_height="match_parent">
-        </com.baidu.mapapi.map.MapView>
+        </org.osmdroid.views.MapView>
 
         <ImageButton
             android:id="@+id/btnBack"

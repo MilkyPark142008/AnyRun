@@ -125,7 +125,7 @@
     <string name="zoom_in">放大</string>
     <string name="zoom_out">缩小</string>
 
-    <!-- 百度地图 -->
+    <!-- 地图底图 -->
     <string name="map_pic_sate">卫星图</string>
     <string name="map_pic_normal">普通图</string>
 

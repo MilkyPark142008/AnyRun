@@ -2,9 +2,7 @@ package com.zcshou.gogogo;
 
 import android.app.Application;
 
-import com.baidu.location.LocationClient;
-import com.baidu.mapapi.CoordType;
-import com.baidu.mapapi.SDKInitializer;
+import androidx.preference.PreferenceManager;
 
 import com.elvishew.xlog.LogConfiguration;
 import com.elvishew.xlog.LogLevel;
@@ -15,6 +13,8 @@ import com.elvishew.xlog.printer.file.FilePrinter;
 import com.elvishew.xlog.printer.file.backup.NeverBackupStrategy;
 import com.elvishew.xlog.printer.file.clean.FileLastModifiedCleanStrategy;
 import com.elvishew.xlog.printer.file.naming.ChangelessFileNameGenerator;
+
+import org.osmdroid.config.Configuration;
 
 import java.io.File;
 
@@ -29,15 +29,22 @@ public class GoApplication extends Application {
 
         initXlog();
 
-        // 百度地图 7.5 开始，要求必须同意隐私政策，默认为false
-        SDKInitializer.setAgreePrivacy(this, true);
-        // 百度定位 7.5 开始，要求必须同意隐私政策，默认为false(官方说可以统一为以上接口，但实际测试并不行，定位还是需要单独设置)
-        LocationClient.setAgreePrivacy(true);
-        SDKInitializer.setApiKey(BuildConfig.MAPS_API_KEY);
-        // 在使用 SDK 各组间之前初始化 context 信息，传入 ApplicationContext
-        SDKInitializer.initialize(this);
+        initOsmdroid();
+    }
 
-        SDKInitializer.setCoordType(CoordType.BD09LL);
+    /**
+     * 初始化 osmdroid（瓦片地图引擎）
+     */
+    private void initOsmdroid() {
+        Configuration osmConfig = Configuration.getInstance();
+        // 读取 osmdroid 自身的配置项（瓦片缓存大小、过期时间等）
+        osmConfig.load(this, PreferenceManager.getDefaultSharedPreferences(this));
+        // OSM / Esri 的瓦片服务器要求带上有意义的 User-Agent，否则会直接返回 403
+        osmConfig.setUserAgentValue(getPackageName());
+        // 瓦片缓存放到应用私有目录，避免申请存储权限
+        File basePath = new File(getCacheDir(), "osmdroid");
+        osmConfig.setOsmdroidBasePath(basePath);
+        osmConfig.setOsmdroidTileCache(new File(basePath, "tiles"));
     }
 
     /**
