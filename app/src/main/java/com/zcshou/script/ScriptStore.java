@@ -146,6 +146,10 @@ public class ScriptStore {
         object.put("end", route.endMode);
         object.put("text", route.text == null ? "" : route.text);
         object.put("points", encodePoints(route.points));
+        // 坐标系跟着脚本自己走：null（旧脚本）时不写字段，读取端再回落到全局设置
+        if (route.fromBd09 != null) {
+            object.put("bd09", route.fromBd09.booleanValue());
+        }
         return object;
     }
 
@@ -160,6 +164,9 @@ public class ScriptStore {
             route.endMode = object.optInt("end", ScriptRoute.END_STOP);
             route.text = object.optString("text", "");
             route.points = decodePoints(object.optString("points", ""));
+            if (object.has("bd09")) {
+                route.fromBd09 = object.optBoolean("bd09", false);
+            }
             return route;
         } catch (Exception e) {
             XLog.e("SCRIPT: parse failed");
@@ -167,8 +174,13 @@ public class ScriptStore {
         }
     }
 
-    /** 路点编码：每行一个，字段用 ; 分隔（mode;lng;lat;alt;speed;wait） */
-    private static String encodePoints(List<ScriptWaypoint> points) {
+    /**
+     * 路点编码：每行一个，字段用 ; 分隔（mode;lng;lat;alt;speed;wait）。
+     *
+     * <p>公开是为了让界面在旋屏 / 重建时也能用它把“还没开始移动的选点”
+     * 塞进 savedInstanceState，避免用户白点一遍。</p>
+     */
+    public static String encodePoints(List<ScriptWaypoint> points) {
         if (points == null || points.isEmpty()) {
             return "";
         }
@@ -189,7 +201,8 @@ public class ScriptStore {
         return builder.toString();
     }
 
-    private static List<ScriptWaypoint> decodePoints(String raw) {
+    /** 路点解码，与 {@link #encodePoints(List)} 配对（恢复选点时也会用到） */
+    public static List<ScriptWaypoint> decodePoints(String raw) {
         List<ScriptWaypoint> points = new ArrayList<>();
         if (TextUtils.isEmpty(raw)) {
             return points;

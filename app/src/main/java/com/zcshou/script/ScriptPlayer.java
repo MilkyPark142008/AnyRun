@@ -20,6 +20,8 @@ public class ScriptPlayer {
     private static final double MOVE_EPSILON_METERS = 0.05D;
     /** 计算下一位置时允许的最小推进距离，避免除零 */
     private static final double MIN_STEP_METERS = 0.01D;
+    /** 速度兜底值（米/秒），避免除零 */
+    private static final double MIN_SPEED = 0.1D;
 
     private ScriptRoute mRoute;
     private boolean mPlaying;
@@ -223,7 +225,8 @@ public class ScriptPlayer {
                 if (!mLoop) {
                     ScriptWaypoint last = points.get(points.size() - 1);
                     mEndReached = true;
-                    updatePosition(last.lng, last.lat, last.alt, last.mode, speedOf(last), mBearing, true);
+                    // 终点的停留已经在最后一段的预算里消耗完，这里只报“已停下”
+                    updatePosition(last.lng, last.lat, last.alt, last.mode, 0, mBearing, true);
 
                     if (mHandler != null) {
                         mHandler.onScriptFinish(mRoute);
@@ -235,33 +238,38 @@ public class ScriptPlayer {
                 ScriptWaypoint last = points.get(mIndex);
                 ScriptWaypoint first = points.get(0);
                 double closing = ScriptParser.distance(last, first);
-                double closingSpeed = speedOf(first);
+                double closingV0 = speedOf(last);
+                double closingV1 = speedOf(first);
 
                 if (closing < MIN_STEP_METERS) {
                     mLap++;
                     mIndex = 0;
                     mBearing = points.size() > 1 ? ScriptParser.bearing(first, points.get(1)) : 0;
                     if (mHandler != null) {
-                        mHandler.onScriptSegment(mRoute, 0, first.mode, speedOf(first));
+                        mHandler.onScriptSegment(mRoute, 0, first.mode, closingV1);
                     }
                     continue;
                 }
 
-                double closingTravel = closing / closingSpeed;
-                if (remainingTime < closingTravel + waitOf(first)) {
-                    double traveled = Math.max(0, Math.min(closingTravel, remainingTime - waitOf(first)));
-                    double distance = Math.max(0, Math.min(closing, closingSpeed * traveled));
+                double closingTravel = travelTime(closing, closingV0, closingV1);
+                // 走完闭合段就回到起点，所以这里消耗的是“起点”的停留时间
+                // （最后一点自己的停留，早在进入这一点那一段里就已经消耗过了）
+                double closingWait = waitOf(first);
+                if (remainingTime < closingTravel + closingWait) {
+                    double moving = Math.max(0, Math.min(closingTravel, remainingTime));
+                    double distance = distanceAt(closingV0, closingV1, moving, closingTravel, closing);
+                    double speed = remainingTime < closingTravel ? speedAt(closingV0, closingV1, moving, closingTravel) : 0;
                     double bearing = ScriptParser.bearing(last, first);
                     double[] position = destination(last.lat, last.lng, bearing, distance);
-                    return updatePosition(position[0], position[1], last.alt, last.mode, closingSpeed, bearing, true);
+                    return updatePosition(position[0], position[1], last.alt, last.mode, speed, bearing, true);
                 }
 
-                remainingTime -= closingTravel + waitOf(first);
+                remainingTime -= closingTravel + closingWait;
                 mLap++;
                 mIndex = 0;
                 mBearing = points.size() > 1 ? ScriptParser.bearing(first, points.get(1)) : 0;
                 if (mHandler != null) {
-                    mHandler.onScriptSegment(mRoute, 0, first.mode, speedOf(first));
+                    mHandler.onScriptSegment(mRoute, 0, first.mode, closingV1);
                 }
                 continue;
             }
@@ -282,20 +290,25 @@ public class ScriptPlayer {
                 continue;
             }
 
-            // 本段用的是起点（上一站）的状态：走 / 跑 / 骑就体现在这里的速度上
-            double speed = speedOf(from);
-            double travel = segment / speed;
+            // 段内速度从起点的状态速度线性过渡到终点的状态速度（走 / 跑 / 骑之间不再瞬变）
+            double v0 = speedOf(from);
+            double v1 = speedOf(to);
+            double travel = travelTime(segment, v0, v1);
+            double dwell = waitOf(to);
 
-            if (remainingTime < travel + waitOf(to)) {
-                double traveled = Math.max(0, Math.min(travel, remainingTime - waitOf(to)));
-                double distance = Math.max(0, Math.min(segment, speed * traveled));
+            if (remainingTime < travel + dwell) {
+                // 先在 travel 秒内走完这一段，然后停在终点消耗停留时间（速度报 0，更像真人）
+                boolean moving = remainingTime < travel;
+                double movingSeconds = moving ? remainingTime : travel;
+                double distance = distanceAt(v0, v1, movingSeconds, travel, segment);
+                double speed = moving ? speedAt(v0, v1, movingSeconds, travel) : 0;
                 double bearing = ScriptParser.bearing(from, to);
                 double[] position = destination(from.lat, from.lng, bearing, distance);
                 return updatePosition(position[0], position[1], from.alt, from.mode, speed, bearing, true);
             }
 
             // 这一段（含到站停留）已经走完，进入下一站
-            remainingTime -= travel + waitOf(to);
+            remainingTime -= travel + dwell;
             mIndex = next;
             mBearing = next + 1 < points.size()
                     ? ScriptParser.bearing(to, points.get(next + 1))
@@ -359,6 +372,40 @@ public class ScriptPlayer {
 
     private static int waitOf(ScriptWaypoint point) {
         return point == null ? 0 : Math.max(0, point.waitSeconds);
+    }
+
+    /**
+     * 走完一段所需的时间。
+     *
+     * <p>段内速度按“起点速度 → 终点速度”线性变化，平均速度正好是两者的算术平均，
+     * 所以耗时 = 2 × 距离 / (v0 + v1)。两个速度相同时退化成原来的“距离 / 速度”，
+     * 因此只选一种状态（走 / 跑 / 骑）的脚本，行为与优化前完全一致。</p>
+     */
+    private static double travelTime(double distance, double v0, double v1) {
+        double sum = v0 + v1;
+        if (sum <= 0) {
+            return distance / Math.max(v0, MIN_SPEED);
+        }
+        return 2.0 * distance / sum;
+    }
+
+    /** 段内已经走了 moving 秒时的瞬时速度（米/秒），用于注入给系统的 speed 字段 */
+    private static double speedAt(double v0, double v1, double moving, double travel) {
+        if (travel <= 0) {
+            return v1;
+        }
+        double ratio = Math.max(0.0, Math.min(1.0, moving / travel));
+        return v0 + (v1 - v0) * ratio;
+    }
+
+    /** 段内已经走了 moving 秒时累计走过的距离（米），是 speedAt 的时间积分 */
+    private static double distanceAt(double v0, double v1, double moving, double travel, double total) {
+        if (travel <= 0) {
+            return 0;
+        }
+        double ratio = Math.max(0.0, Math.min(1.0, moving / travel));
+        double distance = (v0 * ratio + (v1 - v0) * ratio * ratio / 2.0) * travel;
+        return Math.max(0.0, Math.min(total, distance));
     }
 
     /** 起点锚点：脚本从轨迹上的哪一段、已经走了多远（换算成时间）开始 */

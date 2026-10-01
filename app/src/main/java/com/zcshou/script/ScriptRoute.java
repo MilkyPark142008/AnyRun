@@ -18,6 +18,14 @@ public class ScriptRoute {
     public int endMode = END_STOP;
     /** 用户编辑的脚本原文，列表页直接展示、编辑页直接回填 */
     public String text = "";
+    /**
+     * 这条脚本里的经纬度是否为 BD-09。
+     *
+     * <p>null 表示“没有记录”（旧版本保存的脚本），此时沿用全局设置
+     * {@link ScriptParser#KEY_SCRIPT_FROM_BD09}；一旦保存过就固定跟着脚本走，
+     * 避免用户改一次全局单选就让历史脚本整体偏移几百米。</p>
+     */
+    public Boolean fromBd09;
     public List<ScriptWaypoint> points = new ArrayList<>();
 
     public ScriptRoute() {

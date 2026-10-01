@@ -82,16 +82,21 @@ public class ScriptEditActivity extends BaseActivity {
         mCoordWgs84 = findViewById(R.id.script_coord_wgs84);
         mCoordBd09 = findViewById(R.id.script_coord_bd09);
 
-        // 记住上次使用的坐标系
-        boolean fromBd09 = PreferenceManager.getDefaultSharedPreferences(this)
-                .getBoolean(ScriptParser.KEY_SCRIPT_FROM_BD09, false);
-        mCoordBd09.setChecked(fromBd09);
-        mCoordWgs84.setChecked(!fromBd09);
-
         String routeId = getIntent().getStringExtra(EXTRA_ROUTE_ID);
         if (!TextUtils.isEmpty(routeId)) {
             mRoute = mStore.load(routeId);
         }
+
+        // 坐标系优先跟着脚本自己走；旧脚本没有记录时才回落到“上次使用的坐标系”
+        boolean fromBd09;
+        if (mRoute != null && mRoute.fromBd09 != null) {
+            fromBd09 = mRoute.fromBd09;
+        } else {
+            fromBd09 = PreferenceManager.getDefaultSharedPreferences(this)
+                    .getBoolean(ScriptParser.KEY_SCRIPT_FROM_BD09, false);
+        }
+        mCoordBd09.setChecked(fromBd09);
+        mCoordWgs84.setChecked(!fromBd09);
 
         if (mRoute == null) {
             mRoute = new ScriptRoute();
@@ -183,6 +188,8 @@ public class ScriptEditActivity extends BaseActivity {
         mRoute.text = text;
         mRoute.points = parseResult.route.points;
         mRoute.endMode = mLoopCheck.isChecked() ? ScriptRoute.END_LOOP : ScriptRoute.END_STOP;
+        // 坐标系记在这条脚本自己身上，之后改全局单选也不会让它偏移
+        mRoute.fromBd09 = fromBd09;
 
         mStore.save(mRoute);
         PreferenceManager.getDefaultSharedPreferences(this).edit()

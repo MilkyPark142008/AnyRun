@@ -341,7 +341,13 @@ public class ScriptParser {
         return total;
     }
 
-    /** 预计耗时（秒）：按每一段的距离和该段状态的速度累加，再加上停留时间 */
+    /**
+     * 预计耗时（秒）。
+     *
+     * <p>与 {@link ScriptPlayer} 的实际推进保持一致：段内速度从起点速度线性过渡到终点速度，
+     * 平均速度为两者之和的一半；停留时间算在“到达的那个点”上，起点的停留不计
+     * （循环模式下最后一点回到起点的闭合段会在起点停留，所以循环时起点也算一次）。</p>
+     */
     public static long totalSeconds(ScriptRoute route) {
         if (route == null || route.points == null || route.points.isEmpty()) {
             return 0;
@@ -349,20 +355,38 @@ public class ScriptParser {
 
         long seconds = 0;
         for (int i = 1; i < route.points.size(); i++) {
-            ScriptWaypoint point = route.points.get(i);
-            double speed = point.speed > 0 ? point.speed : 1.2;
-            seconds += (long) Math.ceil(distance(route.points.get(i - 1), point) / speed);
+            seconds += segmentSeconds(route.points.get(i - 1), route.points.get(i));
+            seconds += Math.max(0, route.points.get(i).waitSeconds);
         }
         if (route.isLoop() && route.points.size() > 1) {
             ScriptWaypoint first = route.points.get(0);
-            double speed = first.speed > 0 ? first.speed : 1.2;
-            seconds += (long) Math.ceil(distance(route.points.get(route.points.size() - 1), first) / speed);
-        }
-        for (ScriptWaypoint point : route.points) {
-            seconds += Math.max(0, point.waitSeconds);
+            ScriptWaypoint last = route.points.get(route.points.size() - 1);
+            seconds += segmentSeconds(last, first);
+            seconds += Math.max(0, first.waitSeconds);
         }
 
         return seconds;
+    }
+
+    /** 走完一段的预计秒数：平均速度取两端速度的算术平均，与播放器的插值一致 */
+    private static long segmentSeconds(ScriptWaypoint from, ScriptWaypoint to) {
+        double v0 = speedOr(from, 1.2);
+        double v1 = speedOr(to, 1.2);
+        double average = (v0 + v1) / 2.0;
+        if (average <= 0) {
+            average = 1.2;
+        }
+
+        return (long) Math.ceil(distance(from, to) / average);
+    }
+
+    /** 取路点速度，非法（<=0）时回落到默认值 */
+    private static double speedOr(ScriptWaypoint point, double fallback) {
+        if (point == null || point.speed <= 0) {
+            return fallback;
+        }
+
+        return point.speed;
     }
 
     /** 把米格式化成 km / m 的显示文本 */

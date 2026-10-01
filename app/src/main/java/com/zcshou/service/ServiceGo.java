@@ -73,7 +73,6 @@ public class ServiceGo extends Service {
     private static final String SERVICE_GO_NOTE_ACTION_JOYSTICK_SHOW = "ShowJoyStick";
     private static final String SERVICE_GO_NOTE_ACTION_JOYSTICK_HIDE = "HideJoyStick";
     private static final String SERVICE_GO_NOTE_CHANNEL_ID = "SERVICE_GO_NOTE";
-    private static final String SERVICE_GO_NOTE_CHANNEL_NAME = "SERVICE_GO_NOTE";
     private NoteActionReceiver mActReceiver;
     // 摇杆相关
     private JoyStick mJoyStick;
@@ -161,6 +160,13 @@ public class ServiceGo extends Service {
         // 脚本模式：按脚本预设自动移动；没有脚本 id 时保持原来的“定点点位”行为
         if (!isBlank(scriptId)) {
             startScript(scriptId);
+        } else if (intent != null) {
+            // 手动传送（带坐标、不带脚本 id）会打断正在播放的脚本：
+            // 否则脚本线程会继续覆盖位置，界面却提示“已传送到新位置”，两边打架
+            if (mScriptPlayer != null && mScriptPlayer.isPlaying()) {
+                XLog.i("SERVICEGO: manual teleport stops running script");
+                stopScript();
+            }
         }
 
         return START_STICKY;
@@ -229,7 +235,9 @@ public class ServiceGo extends Service {
             filter.addAction(SERVICE_GO_NOTE_ACTION_JOYSTICK_HIDE);
             registerReceiver(mActReceiver, filter);
 
-            NotificationChannel mChannel = new NotificationChannel(SERVICE_GO_NOTE_CHANNEL_ID, SERVICE_GO_NOTE_CHANNEL_NAME, NotificationManager.IMPORTANCE_DEFAULT);
+            // 渠道名会原样显示在系统“通知设置”里，必须是给用户看的文字
+            String channelName = getResources().getString(R.string.app_note_channel_name);
+            NotificationChannel mChannel = new NotificationChannel(SERVICE_GO_NOTE_CHANNEL_ID, channelName, NotificationManager.IMPORTANCE_DEFAULT);
             NotificationManager notificationManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
 
             if (notificationManager != null) {
@@ -450,7 +458,11 @@ public class ServiceGo extends Service {
 
         // 每次启动都按最新文本重新解析，保证编辑过的脚本立刻生效
         if (!isBlank(route.text)) {
-            boolean fromBd09 = PreferenceManager.getDefaultSharedPreferences(this)
+            // 坐标系优先跟着脚本自己走；旧脚本没有记录时才回落到全局设置，
+            // 避免用户改一次全局单选就让这条脚本整体偏移几百米
+            boolean fromBd09 = route.fromBd09 != null
+                    ? route.fromBd09
+                    : PreferenceManager.getDefaultSharedPreferences(this)
                     .getBoolean(ScriptParser.KEY_SCRIPT_FROM_BD09, false);
             ScriptParser.ParseResult parseResult = ScriptParser.parse(route.text, fromBd09, getModeSpeeds());
             if (parseResult.isOk()) {

@@ -238,6 +238,28 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
         initRoutePicking();
 
+        // 恢复旋屏前还没开始移动的选点
+        if (savedInstanceState != null) {
+            mRoutePoints.clear();
+            mRoutePoints.addAll(ScriptStore.decodePoints(savedInstanceState.getString(STATE_ROUTE_POINTS, "")));
+            ScriptWaypoint.Mode[] modes = ScriptWaypoint.Mode.values();
+            int modeOrdinal = savedInstanceState.getInt(STATE_ROUTE_MODE, 0);
+            if (modeOrdinal >= 0 && modeOrdinal < modes.length) {
+                mRouteMode = modes[modeOrdinal];
+            }
+            // 恢复“正在选点”的界面状态，但不弹提示（旋屏不该再提示一次）
+            if (savedInstanceState.getBoolean(STATE_ROUTE_PICKING, false)) {
+                mRoutePicking = true;
+                if (mRouteBar != null) {
+                    mRouteBar.setVisibility(View.VISIBLE);
+                }
+                if (mButtonRoute != null) {
+                    mButtonRoute.setImageResource(R.drawable.ic_close);
+                }
+            }
+            redrawRoute();
+        }
+
         mConnection = new ServiceConnection() {
             @Override
             public void onServiceConnected(ComponentName name, IBinder service) {
@@ -270,6 +292,21 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
         unregisterSensorListener();
         super.onPause();
+    }
+
+    /** 旋屏 / 重建时保存的“还没开始移动的路线选点” */
+    private static final String STATE_ROUTE_POINTS = "state_route_points";
+    private static final String STATE_ROUTE_MODE = "state_route_mode";
+    private static final String STATE_ROUTE_PICKING = "state_route_picking";
+
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+        super.onSaveInstanceState(outState);
+
+        // 选点还没变成一条真正在跑的路线，只有内存里这一份，不存就白点一遍
+        outState.putString(STATE_ROUTE_POINTS, ScriptStore.encodePoints(mRoutePoints));
+        outState.putInt(STATE_ROUTE_MODE, mRouteMode.ordinal());
+        outState.putBoolean(STATE_ROUTE_PICKING, mRoutePicking);
     }
 
     @Override
@@ -1473,7 +1510,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         route.endMode = ScriptRoute.END_STOP;
         route.points = new ArrayList<>(mRoutePoints);
 
-        boolean fromBd09 = sharedPreferences.getBoolean(ScriptParser.KEY_SCRIPT_FROM_BD09, false);
+        // 这条路线由主界面选点生成，坐标本身就是 WGS-84，并把坐标系记在脚本自己身上，
+        // 之后不管全局单选怎么变，重新解析 route.text 都不会偏移
+        boolean fromBd09 = false;
+        route.fromBd09 = Boolean.FALSE;
         StringBuilder text = new StringBuilder();
         for (ScriptWaypoint point : route.points) {
             text.append(ScriptParser.formatPoint(point, fromBd09)).append('\n');
