@@ -56,6 +56,8 @@ public class ScriptActivity extends BaseActivity {
     private ServiceGo.ServiceGoBinder mServiceBinder;
     private boolean mBound;
     private String mPlayingScriptId;
+    /** 刚点过“开始”、但服务连接还没回来时记下的脚本 id，连上后兜底补一次启动 */
+    private String mPendingStartId;
     private int mPlayingIndex;
     /** 播放中切换走 / 跑 / 骑的下拉（只在有脚本播放时显示） */
     private Spinner mLiveModeSpinner;
@@ -70,7 +72,21 @@ public class ScriptActivity extends BaseActivity {
             mBound = true;
             mServiceBinder.setScriptListener(mScriptListener);
 
-            mPlayingScriptId = mServiceBinder.getRunningScriptId();
+            if (mPendingStartId != null) {
+                // 刚点过“开始播放”：服务端没真的在播就用 binder 补一次，
+                // 不再只依赖 onStartCommand 异步送达（没送到 = 点了不动）
+                String pending = mPendingStartId;
+                mPendingStartId = null;
+                ensureScriptPlaying(pending);
+            } else {
+                mPlayingScriptId = mServiceBinder.getRunningScriptId();
+                if (mPlayingScriptId == null) {
+                    // 服务端没在播放，存储里的运行记录一定是过期的，一并清掉，
+                    // 否则列表会一直显示“正在播放”
+                    mStore.setRunningScriptId(null);
+                }
+            }
+
             ScriptWaypoint.Mode mode = mServiceBinder.getLiveMode();
             if (mode == null) {
                 mode = mServiceBinder.getCurrentMode();
@@ -253,6 +269,9 @@ public class ScriptActivity extends BaseActivity {
 
     @Override
     protected void onStop() {
+        // 解绑后不会再有连接回调，挂起的“补启动”请求无处落地，先作废
+        mPendingStartId = null;
+
         if (mBound && mServiceBinder != null) {
             try {
                 mServiceBinder.clearScriptListener();
@@ -371,9 +390,36 @@ public class ScriptActivity extends BaseActivity {
             // 服务是异步起来的，稍后再绑定一次以获取播放进度回调
             mListView.postDelayed(this::bindAfterStart, 800);
 
+            // 已经绑定着就立刻校验一次；还没绑上就记下来，等连接回调里兜底补启动，
+            // 保证“点开始”最终一定会真的进入播放（不只依赖 onStartCommand 送达）
+            mPendingStartId = null;
+            if (mServiceBinder != null) {
+                ensureScriptPlaying(route.id);
+            } else {
+                mPendingStartId = route.id;
+            }
+
             GoUtils.DisplayToast(this, getResources().getString(R.string.script_start));
         } catch (Exception e) {
             GoUtils.DisplayToast(this, getResources().getString(R.string.script_start_fail));
+        }
+    }
+
+    /** 校验服务端确实在播放指定脚本；没在播就用 binder 兜底启动一次 */
+    private void ensureScriptPlaying(String scriptId) {
+        if (mServiceBinder == null || scriptId == null || scriptId.isEmpty()) {
+            return;
+        }
+
+        try {
+            boolean playing = mServiceBinder.getScriptState() == ServiceGo.SCRIPT_STATE_PLAYING
+                    && scriptId.equals(mServiceBinder.getRunningScriptId());
+            if (!playing) {
+                mServiceBinder.startScript(scriptId);
+            }
+            mPlayingScriptId = scriptId;
+        } catch (Exception e) {
+            // 忽略服务异常
         }
     }
 
@@ -396,6 +442,8 @@ public class ScriptActivity extends BaseActivity {
 
     /** 正在播放的脚本被删除时，顺手停掉播放 */
     private void stopPlaying() {
+        mPendingStartId = null;
+
         if (mBound && mServiceBinder != null) {
             try {
                 mServiceBinder.stopScript();
@@ -459,6 +507,7 @@ public class ScriptActivity extends BaseActivity {
             TextView loop = view.findViewById(R.id.script_item_loop);
             TextView info = view.findViewById(R.id.script_item_info);
             TextView status = view.findViewById(R.id.script_item_status);
+            ImageButton edit = view.findViewById(R.id.script_item_edit);
             ImageButton start = view.findViewById(R.id.script_item_start);
 
             name.setText(safeName(route));
@@ -495,6 +544,8 @@ public class ScriptActivity extends BaseActivity {
                 status.setText("");
             }
 
+            // 铅笔按钮：显式的编辑入口（点条目本身也能进编辑页）
+            edit.setOnClickListener(v -> openEditor(route));
             start.setOnClickListener(v -> startPlay(route));
 
             return view;

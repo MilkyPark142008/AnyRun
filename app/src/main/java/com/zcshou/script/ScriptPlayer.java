@@ -172,6 +172,20 @@ public class ScriptPlayer {
 
         Anchor anchor = findAnchor(points, fromLng, fromLat);
 
+        // 站在（或越过）单次路线的终点时按“开始”：接入点会落在最后一段的尽头，
+        // 第一个 tick 就直接判“已到终点”，表现为“点开始后一动不动”。
+        // 这里改成从头重新走，保证任何入口按下“开始”都一定有位移。
+        if (!mLoop && anchor.index >= points.size() - 2) {
+            ScriptWaypoint lastFrom = points.get(anchor.index);
+            ScriptWaypoint lastTo = points.get(anchor.index + 1);
+            double lastTravel = travelTime(ScriptParser.distance(lastFrom, lastTo),
+                    speedOf(lastFrom), speedOf(lastTo));
+            if (anchor.offsetSeconds >= lastTravel - 0.05D) {
+                anchor.index = 0;
+                anchor.offsetSeconds = 0;
+            }
+        }
+
         mIndex = anchor.index;
 
         ScriptWaypoint current = points.get(mIndex);

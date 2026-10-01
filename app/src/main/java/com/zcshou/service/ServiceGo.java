@@ -184,6 +184,22 @@ public class ServiceGo extends Service {
         mScriptState = SCRIPT_STATE_IDLE;
         mScriptListener = null;
 
+        // 服务销毁 = 脚本播放彻底结束，把“正在播放”的持久状态一并清掉。
+        // 之前只在 stopScript() 里清理，而“没绑定上服务时点停止”走的是 stopService() 路径，
+        // 存储里的运行 id 会残留：下次 onResume 读到过期状态，界面把“开始移动”显示成
+        // “停止移动”，点开始又走成了停止，表现为“停止后再开始不移动”。
+        // 系统杀进程（SIGKILL）不会走到 onDestroy，服务重启恢复脚本的逻辑不受影响。
+        try {
+            if (mScriptStore != null) {
+                mScriptStore.setRunningScriptId(null);
+            }
+            PreferenceManager.getDefaultSharedPreferences(this).edit()
+                    .remove(KEY_LAST_SCRIPT_ID)
+                    .apply();
+        } catch (Exception e) {
+            XLog.e("SERVICEGO: ERROR - clear script state on destroy");
+        }
+
         try {
             if (mLocHandler != null) {
                 mLocHandler.removeMessages(HANDLER_MSG_ID);
@@ -259,7 +275,10 @@ public class ServiceGo extends Service {
                     .setContentIntent(clickPI)
                     .addAction(new NotificationCompat.Action(R.drawable.ic_position, getResources().getString(R.string.note_show), showPendingPI))
                     .addAction(new NotificationCompat.Action(R.drawable.ic_fly, getResources().getString(R.string.note_hide), hidePendingPI))
-                    .setSmallIcon(R.mipmap.ic_launcher)
+                    // 通知小图标不能再用 R.mipmap.ic_launcher：自适应图标在通知栏只取前景层，
+                    // 而新图标的前景是透明的（整张图在背景层），会显示成空白。
+                    // 这里直接用图钉矢量，和原版通知图标的轮廓保持一致。
+                    .setSmallIcon(R.drawable.ic_launcher_foreground)
                     .build();
 
             startForeground(SERVICE_GO_NOTE_ID, notification);

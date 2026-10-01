@@ -138,6 +138,62 @@ public class ScriptParser {
         return Math.abs(a - b) < 1e-9;
     }
 
+    /*============================== 带行号的解析（供地图选点） ==============================*/
+
+    /**
+     * 带行号的路点：行号从 0 开始，用来把“地图上的第 N 个路点”映射回脚本原文的那一行，
+     * 地图选点里删除 / 改状态 / 调顺序都只动这一行。
+     */
+    public static class ParsedLine {
+        /** 该路点在脚本原文里的行号（0 起） */
+        public final int lineIndex;
+        /** 解析出的路点（WGS-84） */
+        public final ScriptWaypoint point;
+
+        public ParsedLine(int lineIndex, ScriptWaypoint point) {
+            this.lineIndex = lineIndex;
+            this.point = point;
+        }
+    }
+
+    /**
+     * 逐行解析并保留行号：注释 / 空行跳过、相邻重合点的合并规则与 {@link #parse} 完全一致，
+     * 解析失败的行直接忽略（错误提示交给 {@link #parse} 负责）。
+     *
+     * @return 按路点顺序排列的条目，lineIndex 可直接定位到原文
+     */
+    public static List<ParsedLine> parseLines(String text, boolean fromBd09, double[] modeSpeeds) {
+        List<ParsedLine> entries = new ArrayList<>();
+        if (text == null || text.trim().isEmpty()) {
+            return entries;
+        }
+
+        String[] lines = text.split("\r\n|\r|\n");
+        for (int i = 0; i < lines.length; i++) {
+            LineParse lineParse = parseLine(lines[i], fromBd09, modeSpeeds);
+            if (lineParse.skip || lineParse.error != null || lineParse.point == null) {
+                continue;
+            }
+
+            ScriptWaypoint point = lineParse.point;
+            // 与 parse() 相同的“相邻完全重合”合并规则，保证地图上的点数和校验摘要一致
+            if (!entries.isEmpty()) {
+                ParsedLine lastEntry = entries.get(entries.size() - 1);
+                if (almostSame(lastEntry.point.lng, point.lng) && almostSame(lastEntry.point.lat, point.lat)) {
+                    if (lastEntry.point.mode != point.mode
+                            || Math.abs(lastEntry.point.speed - point.speed) > 1e-6) {
+                        entries.set(entries.size() - 1, new ParsedLine(i, point));
+                    }
+                    continue;
+                }
+            }
+
+            entries.add(new ParsedLine(i, point));
+        }
+
+        return entries;
+    }
+
     /** 单行解析的中间结果 */
     private static class LineParse {
         ScriptWaypoint point;

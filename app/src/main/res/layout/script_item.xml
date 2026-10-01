@@ -75,6 +75,15 @@
     </LinearLayout>
 
     <ImageButton
+        android:id="@+id/script_item_edit"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_gravity="center_vertical"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/script_edit_title"
+        android:src="@drawable/ic_edit" />
+
+    <ImageButton
         android:id="@+id/script_item_start"
         android:layout_width="48dp"
         android:layout_height="48dp"

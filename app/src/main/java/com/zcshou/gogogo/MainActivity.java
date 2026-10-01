@@ -153,6 +153,15 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     private FloatingActionButton mButtonScript;
     /** 当前正在播放的脚本 id，null 表示没有在播放脚本（由定位线程回调更新） */
     private volatile String mRunningScriptId;
+    /**
+     * 已经发出“开始移动”、但服务连接还没回来时记下的脚本 id。
+     *
+     * <p>连上服务后用它兜底补一次启动：以前“点开始”只依赖 onStartCommand 异步送达，
+     * 一旦没送到（或服务端状态过期），界面显示在播放、位置却不动，点停止也没反应。</p>
+     */
+    private String mPendingScriptId;
+    /** 已经发出“停止移动”、但服务连接还没回来时的挂起标记，连上后再补一次停止 */
+    private boolean mPendingStop;
     /*============================== 主界面连续选点（连贯移动） ==============================*/
     /**
      * 主界面选点生成的路线在脚本存储里的固定 id。
@@ -250,12 +259,17 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 mServiceBinder = (ServiceGo.ServiceGoBinder)service;
                 // 脚本播放状态变化时刷新入口按钮（脚本播放可能在脚本模式页面里启动）
                 mServiceBinder.setScriptListener(mScriptListener);
+                syncStateWithService();
                 updateScriptButton();
             }
 
             @Override
             public void onServiceDisconnected(ComponentName name) {
-
+                // 服务异常退出：本地引用已经失效，必须清掉，
+                // 否则之后的“停止 / 开始”全都打在一个死对象上，表现为点了没反应
+                mServiceBinder = null;
+                mBoundToService = false;
+                updateScriptButton();
             }
         };
 
@@ -306,6 +320,13 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         String running = new ScriptStore(this).getRunningScriptId();
         if (running != null) {
             mRunningScriptId = running;
+            // 存储里有运行记录就把服务绑上：既让“停止移动”走 binder（而不是直接
+            // stopService 把服务打死），也方便连上后用服务端真实状态纠正本地缓存
+            bindServiceIfNeeded();
+        } else if (mServiceBinder == null) {
+            // 存储里没有运行记录，本地残留的“正在播放”一定是过期状态，纠正掉
+            // （否则按钮会一直显示“停止移动”，点下去却是停一个没在跑的脚本）
+            mRunningScriptId = null;
         }
         updateScriptButton();
 
@@ -1473,10 +1494,18 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         intent.putExtra(ALT_MSG_ID, first.alt);
 
         try {
-            bindServiceIfNeeded();
+            mPendingStop = false;
+            if (mServiceBinder == null) {
+                // 先记下待启动的脚本：连接回调里会用 binder 兜底启动一次，
+                // 不再只依赖 onStartCommand 异步送达（送达失败 = 点开始不动）
+                mPendingScriptId = route.id;
+                bindServiceIfNeeded();
+            }
             startForegroundService(intent);
             mRunningScriptId = route.id;
             updateScriptButton();
+            // 服务已经在跑时立刻校验一次：服务端没在播就用 binder 补启动
+            ensureScriptPlaying(route.id);
             GoUtils.DisplayToast(this, getResources().getString(R.string.route_started,
                     route.points.size(), ScriptParser.formatDistance(ScriptParser.totalDistance(route))));
         } catch (Exception e) {
@@ -1487,6 +1516,8 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
     /** 停止沿路线移动（当前位置保持不变） */
     private void stopMapRoute() {
+        mPendingScriptId = null;    // 还没落地的“开始”作废
+
         if (mServiceBinder != null) {
             try {
                 mServiceBinder.stopScript();
@@ -1494,16 +1525,79 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 XLog.e("ERROR: stopMapRoute", e);
             }
         } else {
-            try {
-                stopService(new Intent(MainActivity.this, ServiceGo.class));
-            } catch (Exception e) {
-                XLog.e("ERROR: stopMapRoute");
+            // 先把持久状态清掉：以前这一步只靠服务端 stopScript，
+            // 服务没绑上时走 stopService，存储里的运行 id 会残留，
+            // 下次进来按钮还显示“停止移动”，点“开始”实际执行的是停止
+            new ScriptStore(this).setRunningScriptId(null);
+
+            if (mBoundToService) {
+                // 已发起绑定、回调还没回来：直接 stopService 停不掉“已绑定”的服务，
+                // 记下来等连上后再补一次停止
+                mPendingStop = true;
+            } else {
+                try {
+                    stopService(new Intent(MainActivity.this, ServiceGo.class));
+                } catch (Exception e) {
+                    XLog.e("ERROR: stopMapRoute");
+                }
             }
         }
 
         mRunningScriptId = null;
         updateScriptButton();
         GoUtils.DisplayToast(this, getResources().getString(R.string.script_stopped));
+    }
+
+    /**
+     * 校验服务端确实在播放指定脚本；没在播就用 binder 兜底启动一次。
+     *
+     * <p>“点开始不动”的兜底：不管 onStartCommand 有没有送到，只要服务连上了，
+     * 最终一定会真正进入播放状态。</p>
+     */
+    private void ensureScriptPlaying(String scriptId) {
+        if (mServiceBinder == null || TextUtils.isEmpty(scriptId)) {
+            return;
+        }
+
+        try {
+            boolean playing = mServiceBinder.getScriptState() == ServiceGo.SCRIPT_STATE_PLAYING
+                    && scriptId.equals(mServiceBinder.getRunningScriptId());
+            if (!playing) {
+                mServiceBinder.startScript(scriptId);
+                mRunningScriptId = scriptId;
+            }
+        } catch (Exception e) {
+            XLog.e("ERROR: ensureScriptPlaying", e);
+        }
+    }
+
+    /** 服务连上后把挂起的开始 / 停止请求落地，并用服务端状态校准本地缓存 */
+    private void syncStateWithService() {
+        if (mServiceBinder == null) {
+            return;
+        }
+
+        try {
+            if (mPendingStop) {
+                mPendingStop = false;
+                mServiceBinder.stopScript();
+                mRunningScriptId = null;
+            } else if (mPendingScriptId != null) {
+                String pending = mPendingScriptId;
+                mPendingScriptId = null;
+                ensureScriptPlaying(pending);
+            } else {
+                // 常规同步：以服务端为准（本地可能是服务销毁前留下的过期状态）
+                mRunningScriptId = mServiceBinder.getRunningScriptId();
+                if (mRunningScriptId == null) {
+                    // 服务端没在播放，存储里的运行记录也一定是过期的，一并清掉，
+                    // 否则每次 onResume 都会被它带回“停止移动”的错误状态
+                    new ScriptStore(MainActivity.this).setRunningScriptId(null);
+                }
+            }
+        } catch (Exception e) {
+            XLog.e("ERROR: syncStateWithService", e);
+        }
     }
 
     /**
@@ -1583,13 +1677,23 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             return;
         }
 
-        if (bindService(new Intent(MainActivity.this, ServiceGo.class), mConnection, BIND_AUTO_CREATE)) {
-            mBoundToService = true;
+        try {
+            if (bindService(new Intent(MainActivity.this, ServiceGo.class), mConnection, BIND_AUTO_CREATE)) {
+                mBoundToService = true;
+            }
+        } catch (Exception e) {
+            // 绑定失败不能影响“开始移动”：启动走的是 startForegroundService，与绑定无关
+            mBoundToService = false;
+            XLog.e("ERROR: bindService", e);
         }
     }
 
     /** 统一解绑，避免退出时因为“服务不是本界面启动的”而漏掉解绑 */
     private void unbindServiceIfNeeded() {
+        // 解绑后不会再有连接回调，挂起的开始 / 停止请求无处落地，先作废
+        mPendingScriptId = null;
+        mPendingStop = false;
+
         if (!mBoundToService && !isMockServStart) {
             return;
         }
@@ -1619,8 +1723,12 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         serviceGoIntent.putExtra(ALT_MSG_ID, getSettingAltitude());
 
         try {
-            bindService(serviceGoIntent, mConnection, BIND_AUTO_CREATE);    // 绑定服务和活动，之后活动就可以去调服务的方法了
-            mBoundToService = true;
+            if (!mBoundToService) {
+                // 已经绑定过就不要再 bind：同一个 ServiceConnection 重复绑定会直接抛异常，
+                // 把后面的 startForegroundService 一并跳过（表现为点传送 / 开始没反应）
+                bindService(serviceGoIntent, mConnection, BIND_AUTO_CREATE);    // 绑定服务和活动，之后活动就可以去调服务的方法了
+                mBoundToService = true;
+            }
             startForegroundService(serviceGoIntent);
             XLog.d("startForegroundService: ServiceGo");
 

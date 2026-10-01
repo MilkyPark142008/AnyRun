@@ -30,14 +30,19 @@ import org.osmdroid.util.GeoPoint;
 import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.MapEventsOverlay;
 import org.osmdroid.views.overlay.Marker;
+import org.osmdroid.views.overlay.Polyline;
 
 import com.zcshou.script.ScriptParser;
 import com.zcshou.script.ScriptRoute;
 import com.zcshou.script.ScriptStore;
+import com.zcshou.script.ScriptTextEditor;
 import com.zcshou.script.ScriptWaypoint;
 import com.zcshou.utils.GoUtils;
 import com.zcshou.utils.MapUtils;
 import com.zcshou.utils.TileSourceUtils;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 脚本编辑页：文本脚本 + 地图选点。
@@ -60,6 +65,13 @@ public class ScriptEditActivity extends BaseActivity {
     private TextView mPreviewText;
     private RadioButton mCoordWgs84;
     private RadioButton mCoordBd09;
+
+    /** 地图选点对话框打开期间的地图（关闭后置空，避免操作打到已回收的地图上） */
+    private MapView mPickMap;
+    /** 路点连线：只用来看，点在连线上仍会继续加点 */
+    private Polyline mPickLine;
+    /** 已选路点的图钉：单击 = 编辑该点，长按拖动 = 挪位置 */
+    private final List<Marker> mPickMarkers = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -338,21 +350,38 @@ public class ScriptEditActivity extends BaseActivity {
         mapView.setTileSource(TileSourceUtils.OSM_STANDARD);
         mapView.getController().setZoom(DEFAULT_ZOOM);
 
-        // 选点标记：每次新建一份 Drawable，避免与其它地图共用
-        final Marker marker = new Marker(mapView);
-        Drawable icon = ContextCompat.getDrawable(this, R.drawable.icon_gcoding);
-        if (icon != null) {
-            if (icon.getConstantState() != null) {
-                icon = icon.getConstantState().newDrawable();
-            }
-            marker.setIcon(icon);
-        }
-        marker.setAnchor(0.5f, 1.0f);
-        mapView.getOverlays().add(marker);
-
-        // 初位置：脚本第一个点，或者上一次模拟的位置
+        // 初位置：脚本第一个点，或者上一次模拟的位置（有路点时随后会被 fitPickerPoints 校正）
         GeoPoint start = firstPointOrLastPosition();
         mapView.getController().setCenter(start);
+        mPickMap = mapView;
+
+        // 连线图层放最下面：只用来看，点在连线上仍要能继续加点
+        mPickLine = new Polyline(mapView);
+        mPickLine.getOutlinePaint().setColor(ContextCompat.getColor(this, R.color.colorAccent));
+        mPickLine.getOutlinePaint().setStrokeWidth(8.0f);
+        mapView.getOverlays().add(mPickLine);
+
+        // 点击派发器：单击空白处 = 按当前状态往光标处插入一个路点。
+        // osmdroid 按图层倒序派发，路点图钉在它上面，所以点在已有路点上不会走到这里。
+        mapView.getOverlays().add(new MapEventsOverlay(new MapEventsReceiver() {
+            @Override
+            public boolean singleTapConfirmedHelper(GeoPoint p) {
+                // 地图回调给的是 WGS-84；insertPoint 会按编辑页选定的坐标系落到脚本里
+                insertPoint(p.getLongitude(), p.getLatitude());
+                refreshPickerPoints();
+                return true;
+            }
+
+            @Override
+            public boolean longPressHelper(GeoPoint p) {
+                return singleTapConfirmedHelper(p);
+            }
+        }));
+
+        // 把脚本里已有的路点画出来（历史选点可见、可编辑）
+        refreshPickerPoints();
+        // 等对话框完成布局后再把视野缩放到能装下全部路点
+        mapView.post(this::fitPickerPoints);
 
         final Spinner modeSpinner = view.findViewById(R.id.script_map_mode);
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
@@ -365,23 +394,6 @@ public class ScriptEditActivity extends BaseActivity {
         // 与编辑页当前选中的状态保持一致
         ScriptWaypoint.Mode mode = getInsertMode();
         modeSpinner.setSelection(mode == ScriptWaypoint.Mode.RUN ? 1 : mode == ScriptWaypoint.Mode.BIKE ? 2 : 0);
-
-        mapView.getOverlays().add(new MapEventsOverlay(new MapEventsReceiver() {
-            @Override
-            public boolean singleTapConfirmedHelper(GeoPoint p) {
-                marker.setPosition(p);
-                mapView.invalidate();
-
-                // 地图回调给的是 WGS-84；insertPoint 会按编辑页选定的坐标系落到脚本里
-                insertPoint(p.getLongitude(), p.getLatitude());
-                return true;
-            }
-
-            @Override
-            public boolean longPressHelper(GeoPoint p) {
-                return singleTapConfirmedHelper(p);
-            }
-        }));
 
         // 下拉框切换状态时同步回编辑页的单选按钮，避免两个入口状态不一致
         modeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
@@ -406,9 +418,8 @@ public class ScriptEditActivity extends BaseActivity {
         view.findViewById(R.id.script_map_close).setOnClickListener(v -> dialog.dismiss());
         view.findViewById(R.id.script_map_clear).setOnClickListener(v -> {
             mTextEdit.setText("");
-            mapView.getOverlays().remove(marker);
-            mapView.invalidate();
             showPreview();
+            refreshPickerPoints();
         });
 
         dialog.setOnDismissListener(d -> {
@@ -417,7 +428,261 @@ public class ScriptEditActivity extends BaseActivity {
             } catch (Exception e) {
                 // 地图已经回收时忽略
             }
+            mPickMap = null;
+            mPickLine = null;
+            mPickMarkers.clear();
         });
+    }
+
+    /*-------------------------- 选点地图上的路点渲染与编辑 --------------------------*/
+
+    /** 当前文本按路点解析的结果（带行号，与校验摘要的点数一致） */
+    private List<ScriptParser.ParsedLine> currentPickerEntries() {
+        return ScriptParser.parseLines(mTextEdit.getText().toString(),
+                mCoordBd09.isChecked(), getModeSpeeds());
+    }
+
+    /** 按当前文本重画地图上的路点与连线（增删改 / 拖动之后都要调） */
+    private void refreshPickerPoints() {
+        if (mPickMap == null) {
+            return;
+        }
+
+        for (Marker marker : mPickMarkers) {
+            marker.closeInfoWindow();
+            mPickMap.getOverlays().remove(marker);
+        }
+        mPickMarkers.clear();
+
+        List<ScriptParser.ParsedLine> entries = currentPickerEntries();
+        List<GeoPoint> points = new ArrayList<>();
+        Drawable baseIcon = ContextCompat.getDrawable(this, R.drawable.icon_gcoding);
+
+        for (int i = 0; i < entries.size(); i++) {
+            ScriptWaypoint point = entries.get(i).point;
+            GeoPoint geoPoint = new GeoPoint(point.lat, point.lng);
+            points.add(geoPoint);
+
+            Marker marker = new Marker(mPickMap);
+            if (baseIcon != null) {
+                // 每个 Marker 需要各自持有 Drawable，避免共用一份被回收
+                Drawable icon = baseIcon.getConstantState() != null
+                        ? baseIcon.getConstantState().newDrawable() : baseIcon;
+                marker.setIcon(icon);
+            }
+            marker.setAnchor(0.5f, 1.0f);
+            marker.setPosition(geoPoint);
+            marker.setTitle(getResources().getString(R.string.script_point_title, i + 1));
+            marker.setSnippet(point.mode.label);
+            marker.setDraggable(true);
+
+            final int entryIndex = i;
+            marker.setOnMarkerClickListener((m, mv) -> {
+                showPointOptions(entryIndex);
+                return true;
+            });
+            marker.setOnMarkerDragListener(new Marker.OnMarkerDragListener() {
+                @Override
+                public void onMarkerDragStart(Marker m) {
+                }
+
+                @Override
+                public void onMarkerDrag(Marker m) {
+                }
+
+                @Override
+                public void onMarkerDragEnd(Marker m) {
+                    GeoPoint dropped = m.getPosition();
+                    movePickerPoint(entryIndex, dropped.getLongitude(), dropped.getLatitude());
+                }
+            });
+
+            mPickMap.getOverlays().add(marker);
+            mPickMarkers.add(marker);
+        }
+
+        if (mPickLine != null) {
+            mPickLine.setPoints(points);
+        }
+        mPickMap.invalidate();
+    }
+
+    /** 把视野缩放到能装下全部路点（对话框布局完成后调一次） */
+    private void fitPickerPoints() {
+        if (mPickMap == null) {
+            return;
+        }
+
+        List<ScriptParser.ParsedLine> entries = currentPickerEntries();
+        if (entries.isEmpty()) {
+            return;
+        }
+
+        double minLat = 90.0;
+        double maxLat = -90.0;
+        double minLng = 180.0;
+        double maxLng = -180.0;
+        for (ScriptParser.ParsedLine entry : entries) {
+            minLat = Math.min(minLat, entry.point.lat);
+            maxLat = Math.max(maxLat, entry.point.lat);
+            minLng = Math.min(minLng, entry.point.lng);
+            maxLng = Math.max(maxLng, entry.point.lng);
+        }
+
+        double centerLat = (minLat + maxLat) / 2.0;
+        double centerLng = (minLng + maxLng) / 2.0;
+        mPickMap.getController().setCenter(new GeoPoint(centerLat, centerLng));
+
+        if (entries.size() == 1) {
+            return;    // 单点保持默认缩放
+        }
+
+        int width = Math.max(mPickMap.getWidth(), 480);
+        int height = Math.max(mPickMap.getHeight(), 320);
+        double spanLat = (maxLat - minLat) * 110540.0;
+        double spanLng = (maxLng - minLng) * 111320.0 * Math.cos(Math.toRadians(centerLat));
+        double spanMeters = Math.max(Math.max(spanLat, spanLng), 10.0);
+        // Web 墨卡托的 米/像素 = 156543.03392 * cos(纬度) / 2^层级，反解出能装下全部路点的层级
+        double metersPerPixelNeeded = spanMeters / (Math.min(width, height) * 0.8);
+        double zoom = Math.log(156543.03392 * Math.cos(Math.toRadians(centerLat)) / metersPerPixelNeeded)
+                / Math.log(2);
+        zoom = Math.max(3.0, Math.min(19.0, zoom));
+        mPickMap.getController().setZoom(zoom);
+    }
+
+    /** 点已有路点：改状态 / 调顺序 / 删除 */
+    private void showPointOptions(final int entryIndex) {
+        final List<ScriptParser.ParsedLine> entries = currentPickerEntries();
+        if (entryIndex < 0 || entryIndex >= entries.size()) {
+            return;
+        }
+        final int lineIndex = entries.get(entryIndex).lineIndex;
+
+        new AlertDialog.Builder(this)
+                .setTitle(getResources().getString(R.string.script_point_title, entryIndex + 1))
+                .setItems(new String[] {
+                        getResources().getString(R.string.script_point_mode),
+                        getResources().getString(R.string.script_point_up),
+                        getResources().getString(R.string.script_point_down),
+                        getResources().getString(R.string.script_point_delete)},
+                        (dialog, which) -> {
+                            switch (which) {
+                                case 0:
+                                    choosePointMode(lineIndex);
+                                    break;
+                                case 1:
+                                    movePoint(entryIndex, lineIndex, -1);
+                                    break;
+                                case 2:
+                                    movePoint(entryIndex, lineIndex, 1);
+                                    break;
+                                default:
+                                    deletePoint(lineIndex);
+                                    break;
+                            }
+                        })
+                .setNegativeButton(R.string.input_position_cancel, null)
+                .show();
+    }
+
+    /** 修改某个路点的移动状态；速度原本就是旧状态默认值时，跟着换成新状态的默认值 */
+    private void choosePointMode(final int lineIndex) {
+        ScriptWaypoint current = null;
+        for (ScriptParser.ParsedLine entry : currentPickerEntries()) {
+            if (entry.lineIndex == lineIndex) {
+                current = entry.point;
+                break;
+            }
+        }
+        if (current == null) {
+            return;
+        }
+
+        final ScriptWaypoint point = current;
+        final String[] labels = {
+                getResources().getString(R.string.script_mode_walk),
+                getResources().getString(R.string.script_mode_run),
+                getResources().getString(R.string.script_mode_bike)};
+
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.script_point_mode)
+                .setSingleChoiceItems(labels, Math.max(0, point.mode.ordinal()), (dialog, which) -> {
+                    ScriptWaypoint.Mode newMode = modeAt(which);
+                    if (newMode != null && newMode != point.mode) {
+                        String text = ScriptTextEditor.replaceMode(
+                                mTextEdit.getText().toString(), lineIndex, newMode.key);
+                        if (Math.abs(point.speed - getModeSpeed(point.mode)) < 1e-6) {
+                            text = ScriptTextEditor.replaceSpeed(text, lineIndex, getModeSpeed(newMode));
+                        }
+                        applyPickerText(text, R.string.script_point_updated);
+                    }
+                    dialog.dismiss();
+                })
+                .setNegativeButton(R.string.input_position_cancel, null)
+                .show();
+    }
+
+    private static ScriptWaypoint.Mode modeAt(int position) {
+        if (position == 1) {
+            return ScriptWaypoint.Mode.RUN;
+        }
+        if (position == 2) {
+            return ScriptWaypoint.Mode.BIKE;
+        }
+        return ScriptWaypoint.Mode.WALK;
+    }
+
+    /** 与上 / 下一个路点交换顺序（按路点顺序，注释行留在原地） */
+    private void movePoint(int entryIndex, int lineIndex, int direction) {
+        List<ScriptParser.ParsedLine> entries = currentPickerEntries();
+        int other = entryIndex + direction;
+        if (entryIndex < 0 || entryIndex >= entries.size() || other < 0 || other >= entries.size()) {
+            return;     // 已经在最前 / 最后
+        }
+
+        String text = ScriptTextEditor.swapLines(mTextEdit.getText().toString(),
+                lineIndex, entries.get(other).lineIndex);
+        applyPickerText(text, R.string.script_point_moved);
+    }
+
+    /** 删除某个路点（只删它那一行，注释与其它路点不受影响） */
+    private void deletePoint(int lineIndex) {
+        String text = ScriptTextEditor.deleteLine(mTextEdit.getText().toString(), lineIndex);
+        applyPickerText(text, R.string.script_point_deleted);
+    }
+
+    /** 拖动结束：把该路点在原文里的坐标换成新位置 */
+    private void movePickerPoint(int entryIndex, double lngWgs84, double latWgs84) {
+        List<ScriptParser.ParsedLine> entries = currentPickerEntries();
+        if (entryIndex < 0 || entryIndex >= entries.size()) {
+            return;
+        }
+
+        // 脚本声明为 BD-09 时，写回的坐标也要转成 BD-09，保证整份脚本坐标系一致
+        double lng = lngWgs84;
+        double lat = latWgs84;
+        if (mCoordBd09.isChecked()) {
+            double[] bd09 = MapUtils.wgs2bd09(lngWgs84, latWgs84);
+            lng = bd09[0];
+            lat = bd09[1];
+        }
+
+        String text = ScriptTextEditor.replaceCoords(mTextEdit.getText().toString(),
+                entries.get(entryIndex).lineIndex, lng, lat);
+        applyPickerText(text, R.string.script_point_dropped);
+    }
+
+    /** 用新文本替换编辑框内容（保留光标位置），并同步实时预览与地图上的路点 */
+    private void applyPickerText(String newText, int messageRes) {
+        int selection = mTextEdit.getSelectionStart();
+        mTextEdit.setText(newText);
+        int length = mTextEdit.getText().length();
+        mTextEdit.setSelection(Math.max(0, Math.min(Math.max(selection, 0), length)));
+
+        showPreview();
+        refreshPickerPoints();
+
+        GoUtils.DisplayToast(this, getResources().getString(messageRes));
     }
 
     /** 地图初始位置：脚本第一个点 > 上次模拟位置 > 默认点 */
