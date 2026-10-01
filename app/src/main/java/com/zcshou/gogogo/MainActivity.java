@@ -167,6 +167,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     private boolean mClickMoveEnabled;
     /** 左下角“点击移动 ⇄ 摇杆移动”开关，模拟位置运行期间才显示 */
     private Button mClickMoveSwitch;
+    /** 上一次刷新时脚本是否在播（用于检测“没在播 → 在播”并开启地图跟随） */
+    private boolean mWasScriptRunning;
+    /** 定位图层自动重试是否已挂起（同一时刻只保留一条重试链） */
+    private boolean mMyLocationRetryPending;
     /*============================== 主界面连续选点（连贯移动） ==============================*/
     /**
      * 主界面选点生成的路线在脚本存储里的固定 id。
@@ -1162,6 +1166,18 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
     /** 按当前是否在播放脚本切换入口按钮的图标（路线操作条上的按钮随之刷新） */
     private void updateScriptButton() {
+        // 脚本“没在播 → 在播”的沿变化：脚本启动会把位置对齐到路线首点（常在视野外），
+        // 开启跟随让地图追着人物走，白色箭头始终在视野里；用户手动拖地图会自动退出跟随
+        boolean scriptRunning = mRunningScriptId != null;
+        if (scriptRunning && !mWasScriptRunning && mMyLocationOverlay != null) {
+            try {
+                mMyLocationOverlay.enableFollowLocation();
+            } catch (Exception e) {
+                XLog.e("ERROR: enableFollowLocation", e);
+            }
+        }
+        mWasScriptRunning = scriptRunning;
+
         // 脚本启停可能伴随模拟位置服务重建，顺手确保定位图层还开着
         ensureMyLocationEnabled();
         // 模拟位置（脚本）的启停决定左下角开关的显隐
@@ -1181,9 +1197,11 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
      * <p>模拟位置服务销毁时会移除 GPS / 网络测试提供者，这期间回到界面对图层调
      * enableMyLocation() 会因为“没有可用提供者”**静默失败**（GpsMyLocationProvider
      * 吞掉异常返回 false，图层的 mIsLocationEnabled 置为 false 且不再自动重试），
-     * 表现就是“脚本执行 → 取消 → 再执行后人物箭头不见了”，而模拟位置本身照常。
-     * 这里在界面刷新、脚本状态变化、回到界面时各补一次；enableMyLocation 内部会
-     * 先 stop 再 start，顺带把服务重建后失效的旧监听换成新的。</p>
+     * 表现就是“切换到脚本 / 从脚本切回摇杆后白色箭头不见了”，而模拟位置本身照常。</p>
+     *
+     * <p>脚本启动、停止走 stopService 都正好落在“提供者先删后加”的窗口里，
+     * 所以这里失败时会挂一个 1 秒后的自动重试（同一时刻只允许一条重试链，
+     * 成功即停），提供者一建回来箭头立刻恢复，不必干等下一个界面事件。</p>
      */
     private void ensureMyLocationEnabled() {
         if (mMyLocationOverlay == null) {
@@ -1191,7 +1209,22 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
 
         try {
-            mMyLocationOverlay.enableMyLocation();
+            boolean ok = mMyLocationOverlay.enableMyLocation();
+            if (ok) {
+                mMyLocationRetryPending = false;
+                return;
+            }
+
+            if (!mMyLocationRetryPending && mMapView != null) {
+                mMyLocationRetryPending = true;
+                mMapView.postDelayed(() -> {
+                    mMyLocationRetryPending = false;
+                    if (isFinishing() || isDestroyed()) {
+                        return;
+                    }
+                    ensureMyLocationEnabled();
+                }, 1000);
+            }
         } catch (Exception e) {
             XLog.e("ERROR: enableMyLocation", e);
         }
