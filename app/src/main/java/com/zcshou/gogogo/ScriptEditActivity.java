@@ -10,11 +10,15 @@ import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
+import android.widget.BaseAdapter;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.ListView;
 import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.Spinner;
 import android.widget.TextView;
 
@@ -24,6 +28,8 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.widget.Toolbar;
 import androidx.core.content.ContextCompat;
 import androidx.preference.PreferenceManager;
+
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import org.osmdroid.events.MapEventsReceiver;
 import org.osmdroid.util.GeoPoint;
@@ -45,10 +51,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 脚本编辑页：文本脚本 + 地图选点。
+ * 脚本编辑页：路点列表 + 原文文本 + 地图选点。
  *
- * <p>文本框里一行一个路点，既可以直接粘贴经纬度，也可以点击地图按当前选中的状态
- * （走 / 跑 / 骑）往光标处插入一行。</p>
+ * <p>默认在「路点列表」视图：每行一个路点，点开表单即可改状态、经纬度（分栏填写）、
+ * 速度、停留，也能删除 / 调顺序；「原文」视图保留纯文本编辑（注释、自由写法都还在）。
+ * 两个视图共用同一份脚本文本——列表只是 {@link ScriptParser#parseLines} 的视图，
+ * 表单的每次保存都只改原文里对应的那一行。</p>
  */
 public class ScriptEditActivity extends BaseActivity {
     /** 编辑已有脚本时传入脚本 id */
@@ -65,6 +73,15 @@ public class ScriptEditActivity extends BaseActivity {
     private TextView mPreviewText;
     private RadioButton mCoordWgs84;
     private RadioButton mCoordBd09;
+
+    /** 「路点列表 / 原文」切换 */
+    private RadioGroup mTabGroup;
+    /** 原文视图容器 */
+    private View mTextPanel;
+    /** 路点列表与空态提示 */
+    private ListView mPointList;
+    private TextView mPointEmpty;
+    private PointAdapter mPointAdapter;
 
     /** 地图选点对话框打开期间的地图（关闭后置空，避免操作打到已回收的地图上） */
     private MapView mPickMap;
@@ -130,7 +147,26 @@ public class ScriptEditActivity extends BaseActivity {
         findViewById(R.id.script_append_current).setOnClickListener(v -> appendCurrentPosition());
         findViewById(R.id.script_check).setOnClickListener(v -> checkScript());
 
-        // 编辑过程中实时更新摘要，随时能看到脚本是否还合法
+        // 路点列表：数据来自脚本文本，点行 = 表单编辑，右下角 + = 表单新增
+        mTabGroup = findViewById(R.id.script_tab_group);
+        mTextPanel = findViewById(R.id.script_text_panel);
+        mPointList = findViewById(R.id.script_point_list);
+        mPointEmpty = findViewById(R.id.script_point_empty);
+
+        mPointAdapter = new PointAdapter();
+        mPointList.setAdapter(mPointAdapter);
+        mPointList.setOnItemClickListener((parent, view, position, id) -> showPointForm(position));
+        findViewById(R.id.script_point_add).setOnClickListener(v -> showPointForm(-1));
+        mTabGroup.setOnCheckedChangeListener((group, checkedId) -> applyTab(checkedId));
+
+        // 坐标系切换会改变原文的解读方式，摘要和列表都要跟着刷新
+        ((RadioGroup) findViewById(R.id.script_coord_group))
+                .setOnCheckedChangeListener((group, checkedId) -> {
+                    showPreview();
+                    refreshPointList();
+                });
+
+        // 编辑过程中实时更新摘要与路点列表，随时能看到脚本是否还合法
         mTextEdit.addTextChangedListener(new TextWatcher() {
             @Override
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {
@@ -143,9 +179,11 @@ public class ScriptEditActivity extends BaseActivity {
             @Override
             public void afterTextChanged(Editable s) {
                 showPreview();
+                refreshPointList();
             }
         });
 
+        applyTab(mTabGroup.getCheckedRadioButtonId());
         showPreview();
     }
 
@@ -278,7 +316,7 @@ public class ScriptEditActivity extends BaseActivity {
     }
 
     /**
-     * 在光标处插入一个路点。
+     * 插入一个路点。
      *
      * @param lngWgs84 经度（WGS-84，地图回调与内部模拟坐标都是这个坐标系）
      * @param latWgs84 纬度（WGS-84）
@@ -287,21 +325,23 @@ public class ScriptEditActivity extends BaseActivity {
         ScriptWaypoint.Mode mode = getInsertMode();
         double speed = getModeSpeed(mode);
 
-        // 脚本声明为 BD-09 时，插入的坐标也要转成 BD-09，保证整份脚本坐标系一致
-        double lng = lngWgs84;
-        double lat = latWgs84;
-        if (mCoordBd09.isChecked()) {
-            double[] bd09 = MapUtils.wgs2bd09(lngWgs84, latWgs84);
-            lng = bd09[0];
-            lat = bd09[1];
-        }
+        // formatPoint 负责按脚本坐标系转换（BD-09 勾选时写 BD-09 坐标）
+        ScriptWaypoint point = new ScriptWaypoint(lngWgs84, latWgs84, getSettingAltitude(), mode, speed, 0);
+        String line = ScriptParser.formatPoint(point, mCoordBd09.isChecked());
 
-        ScriptWaypoint point = new ScriptWaypoint(lng, lat, getSettingAltitude(), mode, speed, 0);
-        String line = String.format(java.util.Locale.US, "%s %.6f %.6f  %.1f", mode.key, lng, lat, speed);
-
-        int start = Math.max(0, Math.min(mTextEdit.getSelectionStart(), mTextEdit.getText().length()));
-        int end = Math.max(start, Math.min(mTextEdit.getSelectionEnd(), mTextEdit.getText().length()));
         String text = mTextEdit.getText().toString();
+
+        // 列表视图下没有明确的光标语义，新点直接追加到末尾；
+        // 原文视图保持原来的“插到光标处”，方便手工编排顺序
+        int start;
+        int end;
+        if (isListTab()) {
+            start = text.length();
+            end = start;
+        } else {
+            start = Math.max(0, Math.min(mTextEdit.getSelectionStart(), text.length()));
+            end = Math.max(start, Math.min(mTextEdit.getSelectionEnd(), text.length()));
+        }
 
         String prefix = "";
         if (start > 0 && text.charAt(start - 1) != '\n') {
@@ -333,11 +373,293 @@ public class ScriptEditActivity extends BaseActivity {
         }
     }
 
+    /*============================== 路点列表 / 表单 ==============================*/
+
+    /** 当前是否在「路点列表」视图 */
+    private boolean isListTab() {
+        return mTabGroup != null && mTabGroup.getCheckedRadioButtonId() == R.id.script_tab_points;
+    }
+
+    /** 切换「路点列表 / 原文」两个视图 */
+    private void applyTab(int checkedId) {
+        if (mTextPanel == null || mPointList == null) {
+            return;
+        }
+
+        boolean listTab = checkedId == R.id.script_tab_points;
+        mTextPanel.setVisibility(listTab ? View.GONE : View.VISIBLE);
+        findViewById(R.id.script_point_add).setVisibility(listTab ? View.VISIBLE : View.GONE);
+        refreshPointList();
+    }
+
+    /** 文本 / 坐标系 / 表单改动后重建列表（列表只是脚本文本的视图） */
+    private void refreshPointList() {
+        if (mPointAdapter == null) {
+            return;
+        }
+
+        mPointAdapter.setEntries(currentPickerEntries());
+        mPointAdapter.notifyDataSetChanged();
+        applyEmptyState();
+    }
+
+    /** 列表空态：只在列表视图生效 */
+    private void applyEmptyState() {
+        boolean listTab = isListTab();
+        boolean empty = mPointAdapter.getCount() == 0;
+        mPointList.setVisibility(listTab && !empty ? View.VISIBLE : View.GONE);
+        mPointEmpty.setVisibility(listTab && empty ? View.VISIBLE : View.GONE);
+    }
+
+    /**
+     * 添加（entryIndex &lt; 0）或编辑一个路点的表单。
+     *
+     * <p>表单里经度、纬度分栏填写（显示 WGS-84）；保存时按脚本坐标系生成一行，
+     * 编辑只重写原文里对应的那一行，注释与其它路点不受影响。</p>
+     */
+    private void showPointForm(final int entryIndex) {
+        final List<ScriptParser.ParsedLine> entries = currentPickerEntries();
+        final boolean editing = entryIndex >= 0 && entryIndex < entries.size();
+        final int lineIndex = editing ? entries.get(entryIndex).lineIndex : -1;
+
+        View form = LayoutInflater.from(this).inflate(R.layout.script_point_form, null);
+        final EditText lngEdit = form.findViewById(R.id.script_form_lng);
+        final EditText latEdit = form.findViewById(R.id.script_form_lat);
+        final EditText speedEdit = form.findViewById(R.id.script_form_speed);
+        final EditText waitEdit = form.findViewById(R.id.script_form_wait);
+        final RadioButton formWalk = form.findViewById(R.id.script_form_walk);
+        final RadioButton formRun = form.findViewById(R.id.script_form_run);
+        final RadioButton formBike = form.findViewById(R.id.script_form_bike);
+        View ops = form.findViewById(R.id.script_form_ops);
+
+        if (editing) {
+            ScriptWaypoint point = entries.get(entryIndex).point;
+            lngEdit.setText(formatCoord(point.lng));
+            latEdit.setText(formatCoord(point.lat));
+            if (point.speed > 0) {
+                speedEdit.setText(trimSpeed(point.speed));
+            }
+            if (point.waitSeconds > 0) {
+                waitEdit.setText(String.valueOf(point.waitSeconds));
+            }
+            if (point.mode == ScriptWaypoint.Mode.RUN) {
+                formRun.setChecked(true);
+            } else if (point.mode == ScriptWaypoint.Mode.BIKE) {
+                formBike.setChecked(true);
+            } else {
+                formWalk.setChecked(true);
+            }
+            ops.setVisibility(View.VISIBLE);
+        } else {
+            // 新增时状态默认跟随底部的“插入状态”单选
+            ScriptWaypoint.Mode mode = getInsertMode();
+            if (mode == ScriptWaypoint.Mode.RUN) {
+                formRun.setChecked(true);
+            } else if (mode == ScriptWaypoint.Mode.BIKE) {
+                formBike.setChecked(true);
+            } else {
+                formWalk.setChecked(true);
+            }
+        }
+
+        String title = editing
+                ? getResources().getString(R.string.script_point_title, entryIndex + 1)
+                : getResources().getString(R.string.script_point_add);
+        final AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setTitle(title)
+                .setView(form)
+                .setPositiveButton(R.string.script_save, null)
+                .setNegativeButton(R.string.input_position_cancel, null)
+                .show();
+
+        // 保存按钮先拦下来校验，通过才关闭弹窗
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            ScriptWaypoint.Mode mode = formRun.isChecked() ? ScriptWaypoint.Mode.RUN
+                    : formBike.isChecked() ? ScriptWaypoint.Mode.BIKE
+                    : ScriptWaypoint.Mode.WALK;
+
+            String lngText = lngEdit.getText().toString().trim();
+            String latText = latEdit.getText().toString().trim();
+            if (TextUtils.isEmpty(lngText) || TextUtils.isEmpty(latText)) {
+                GoUtils.DisplayToast(this, getResources().getString(R.string.input_position_empty));
+                return;
+            }
+
+            double lng;
+            double lat;
+            try {
+                lng = Double.parseDouble(lngText);
+                lat = Double.parseDouble(latText);
+            } catch (NumberFormatException e) {
+                GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_input));
+                return;
+            }
+            if (lng < -180.0 || lng > 180.0 || lat < -90.0 || lat > 90.0) {
+                GoUtils.DisplayToast(this, getResources().getString(R.string.coord_range_error));
+                return;
+            }
+
+            double speed = 0;
+            String speedText = speedEdit.getText().toString().trim();
+            if (!TextUtils.isEmpty(speedText)) {
+                try {
+                    speed = Double.parseDouble(speedText);
+                } catch (NumberFormatException e) {
+                    GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_input));
+                    return;
+                }
+                if (speed < 0) {
+                    speed = 0;
+                }
+            }
+
+            int wait = 0;
+            String waitText = waitEdit.getText().toString().trim();
+            if (!TextUtils.isEmpty(waitText)) {
+                try {
+                    wait = (int) Math.round(Double.parseDouble(waitText));
+                } catch (NumberFormatException e) {
+                    GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_input));
+                    return;
+                }
+                if (wait < 0) {
+                    wait = 0;
+                }
+            }
+
+            // 表单里是 WGS-84，formatPoint 按脚本坐标系写回
+            ScriptWaypoint point = new ScriptWaypoint(lng, lat, getSettingAltitude(), mode, speed, wait);
+            String line = ScriptParser.formatPoint(point, mCoordBd09.isChecked(), true);
+
+            String text = mTextEdit.getText().toString();
+            if (editing) {
+                text = ScriptTextEditor.setLine(text, lineIndex, line);
+            } else {
+                if (!text.isEmpty() && !text.endsWith("\n")) {
+                    text = text + "\n";
+                }
+                text = text + line;
+            }
+
+            applyPickerText(text, editing ? R.string.script_point_saved : R.string.script_point_added);
+            dialog.dismiss();
+        });
+
+        if (editing) {
+            form.findViewById(R.id.script_form_delete).setOnClickListener(v -> {
+                deletePoint(lineIndex);
+                dialog.dismiss();
+            });
+            form.findViewById(R.id.script_form_up).setOnClickListener(v -> {
+                movePoint(entryIndex, lineIndex, -1);
+                dialog.dismiss();
+            });
+            form.findViewById(R.id.script_form_down).setOnClickListener(v -> {
+                movePoint(entryIndex, lineIndex, 1);
+                dialog.dismiss();
+            });
+        }
+    }
+
+    /** 输入框里的坐标文本：保留 6 位精度并去掉多余的 0（116.397000 -> 116.397） */
+    private static String formatCoord(double value) {
+        String text = String.format(java.util.Locale.US, "%.6f", value);
+        text = text.replaceFirst("0+$", "").replaceFirst("\\.$", "");
+        return text.isEmpty() ? "0" : text;
+    }
+
+    /** 速度的显示写法：10.0 -> 10，3.6 -> 3.6 */
+    private static String trimSpeed(double speed) {
+        String text = Double.toString(speed);
+        return text.endsWith(".0") ? text.substring(0, text.length() - 2) : text;
+    }
+
+    private String modeLabel(ScriptWaypoint.Mode mode) {
+        return mode == null ? "" : mode.label;
+    }
+
+    private int modeColor(ScriptWaypoint.Mode mode) {
+        int colorRes;
+        switch (mode == null ? ScriptWaypoint.Mode.WALK : mode) {
+            case RUN:
+                colorRes = R.color.darkorange;
+                break;
+            case BIKE:
+                colorRes = R.color.steelblue;
+                break;
+            default:
+                colorRes = R.color.colorAccent;
+                break;
+        }
+        return ContextCompat.getColor(this, colorRes);
+    }
+
+    /** 路点列表适配器：行内容完全来自解析结果，与校验摘要的点数保持一致 */
+    private class PointAdapter extends BaseAdapter {
+        private final LayoutInflater mInflater = LayoutInflater.from(ScriptEditActivity.this);
+        private List<ScriptParser.ParsedLine> mEntries = new ArrayList<>();
+
+        void setEntries(List<ScriptParser.ParsedLine> entries) {
+            mEntries = entries == null ? new ArrayList<>() : entries;
+        }
+
+        @Override
+        public int getCount() {
+            return mEntries.size();
+        }
+
+        @Override
+        public Object getItem(int position) {
+            return mEntries.get(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            View view = convertView;
+            if (view == null) {
+                view = mInflater.inflate(R.layout.script_point_item, parent, false);
+            }
+
+            ScriptWaypoint point = mEntries.get(position).point;
+
+            TextView index = view.findViewById(R.id.script_point_index);
+            TextView mode = view.findViewById(R.id.script_point_mode);
+            TextView coords = view.findViewById(R.id.script_point_coords);
+            TextView extra = view.findViewById(R.id.script_point_extra);
+
+            index.setText(String.valueOf(position + 1));
+            mode.setText(modeLabel(point.mode));
+            mode.setBackgroundColor(modeColor(point.mode));
+            coords.setText(String.format(java.util.Locale.US, "%.6f, %.6f", point.lng, point.lat));
+
+            String extraText;
+            if (point.speed > 0 && point.waitSeconds > 0) {
+                extraText = getResources().getString(R.string.script_point_speed_wait,
+                        trimSpeed(point.speed), point.waitSeconds);
+            } else if (point.speed > 0) {
+                extraText = getResources().getString(R.string.script_point_speed_only, trimSpeed(point.speed));
+            } else if (point.waitSeconds > 0) {
+                extraText = getResources().getString(R.string.script_point_wait_only, point.waitSeconds);
+            } else {
+                extraText = "";
+            }
+            extra.setText(extraText);
+            extra.setVisibility(TextUtils.isEmpty(extraText) ? View.GONE : View.VISIBLE);
+
+            return view;
+        }
+    }
+
     /*============================== 地图选点 ==============================*/
 
     private void showMapPicker() {
         View view = LayoutInflater.from(this).inflate(R.layout.script_map_pick, null);
-        AlertDialog dialog = new AlertDialog.Builder(this)
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.script_map_pick)
                 .setView(view)
                 .create();
@@ -558,7 +880,7 @@ public class ScriptEditActivity extends BaseActivity {
         }
         final int lineIndex = entries.get(entryIndex).lineIndex;
 
-        new AlertDialog.Builder(this)
+        new MaterialAlertDialogBuilder(this)
                 .setTitle(getResources().getString(R.string.script_point_title, entryIndex + 1))
                 .setItems(new String[] {
                         getResources().getString(R.string.script_point_mode),
@@ -604,7 +926,7 @@ public class ScriptEditActivity extends BaseActivity {
                 getResources().getString(R.string.script_mode_run),
                 getResources().getString(R.string.script_mode_bike)};
 
-        new AlertDialog.Builder(this)
+        new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.script_point_mode)
                 .setSingleChoiceItems(labels, Math.max(0, point.mode.ordinal()), (dialog, which) -> {
                     ScriptWaypoint.Mode newMode = modeAt(which);
@@ -672,7 +994,7 @@ public class ScriptEditActivity extends BaseActivity {
         applyPickerText(text, R.string.script_point_dropped);
     }
 
-    /** 用新文本替换编辑框内容（保留光标位置），并同步实时预览与地图上的路点 */
+    /** 用新文本替换编辑框内容（保留光标位置），并同步实时预览、路点列表与地图上的路点 */
     private void applyPickerText(String newText, int messageRes) {
         int selection = mTextEdit.getSelectionStart();
         mTextEdit.setText(newText);
@@ -680,6 +1002,7 @@ public class ScriptEditActivity extends BaseActivity {
         mTextEdit.setSelection(Math.max(0, Math.min(Math.max(selection, 0), length)));
 
         showPreview();
+        refreshPointList();
         refreshPickerPoints();
 
         GoUtils.DisplayToast(this, getResources().getString(messageRes));

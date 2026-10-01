@@ -343,11 +343,20 @@ public class ScriptParser {
     /*============================== 脚本生成 ==============================*/
 
     /**
-     * 把一个路点格式化成脚本里的一行，供编辑页“插入路点”使用。
+     * 把一个路点格式化成脚本里的一行，供地图插点 / 表单保存使用。
      *
-     * @param bd09 是否按 BD-09 输出坐标
+     * @param bd09 是否按 BD-09 输出坐标（入参始终是 WGS-84）
      */
     public static String formatPoint(ScriptWaypoint point, boolean bd09) {
+        return formatPoint(point, bd09, false);
+    }
+
+    /**
+     * 同上，可选择带出停留秒数。
+     *
+     * @param withWait 是否在行尾追加停留秒数（&lt;= 0 时不追加）
+     */
+    public static String formatPoint(ScriptWaypoint point, boolean bd09, boolean withWait) {
         double lng = point.lng;
         double lat = point.lat;
 
@@ -357,7 +366,17 @@ public class ScriptParser {
             lat = bd[1];
         }
 
-        return String.format(Locale.US, "%s %.6f %.6f  %.1f", point.mode.key, lng, lat, point.speed);
+        StringBuilder line = new StringBuilder();
+        line.append(String.format(Locale.US, "%s %.6f %.6f", point.mode.key, lng, lat));
+        // 速度没写（<=0）时省略，让解析端用该状态的默认速度
+        if (point.speed > 0) {
+            line.append(' ').append(Double.toString(point.speed));
+        }
+        if (withWait && point.waitSeconds > 0) {
+            line.append(' ').append(point.waitSeconds);
+        }
+
+        return line.toString();
     }
 
     /*============================== 统计 ==============================*/

@@ -9,6 +9,8 @@ import androidx.appcompat.app.ActionBar;
 import androidx.appcompat.app.AlertDialog;
 import androidx.preference.PreferenceManager;
 
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+
 import android.text.InputType;
 import android.text.TextUtils;
 import android.util.Log;
@@ -100,7 +102,7 @@ public class HistoryActivity extends BaseActivity {
             this.finish(); // back button
             return true;
         } else if (id ==  R.id.action_delete) {
-            new AlertDialog.Builder(HistoryActivity.this)
+            new MaterialAlertDialogBuilder(HistoryActivity.this)
                     .setTitle("警告")//这里是表头的内容
                     .setMessage("确定要删除全部历史记录吗?")//这里是中间显示的具体信息
                     .setPositiveButton("确定",
@@ -264,7 +266,7 @@ public class HistoryActivity extends BaseActivity {
     }
 
     private void showDeleteDialog(String locID) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        AlertDialog.Builder builder = new MaterialAlertDialogBuilder(this);
         builder.setTitle("警告");
         builder.setMessage("确定要删除该项历史记录吗?");
         builder.setPositiveButton("确定", (dialog, whichButton) -> {
@@ -284,7 +286,7 @@ public class HistoryActivity extends BaseActivity {
         input.setInputType(InputType.TYPE_CLASS_TEXT);
         input.setText(name);
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        AlertDialog.Builder builder = new MaterialAlertDialogBuilder(this);
         builder.setTitle("名称");
         builder.setView(input);
         builder.setPositiveButton("确认", (dialog, whichButton) -> {

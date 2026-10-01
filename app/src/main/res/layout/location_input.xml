@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 手动输入经纬度：经度 / 纬度分栏输入，粘贴整串坐标时自动分填 -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content">
@@ -18,18 +19,39 @@
             android:text="@string/input_position_tips"
             android:textSize="12sp" />
 
-        <EditText
-            android:id="@+id/input_position_text"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginStart="16dp"
             android:layout_marginTop="8dp"
             android:layout_marginEnd="16dp"
-            android:autofillHints="postalCode"
-            android:fontFamily="monospace"
-            android:hint="@string/input_position_hint"
-            android:inputType="text"
-            android:minHeight="48dp" />
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/input_position_lng"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:autofillHints=""
+                android:fontFamily="monospace"
+                android:hint="@string/input_position_lng_hint"
+                android:importantForAutofill="no"
+                android:inputType="numberSigned|numberDecimal"
+                android:minHeight="48dp" />
+
+            <EditText
+                android:id="@+id/input_position_lat"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:autofillHints=""
+                android:fontFamily="monospace"
+                android:hint="@string/input_position_lat_hint"
+                android:importantForAutofill="no"
+                android:inputType="numberSigned|numberDecimal"
+                android:minHeight="48dp" />
+        </LinearLayout>
 
         <RadioGroup
             android:id="@+id/input_position_group"

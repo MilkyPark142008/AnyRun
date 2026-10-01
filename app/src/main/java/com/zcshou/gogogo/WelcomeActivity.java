@@ -2,7 +2,6 @@ package com.zcshou.gogogo;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
-import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -23,9 +22,11 @@ import android.widget.CheckBox;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.preference.PreferenceManager;
 
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.zcshou.utils.GoUtils;
 
 import java.util.ArrayList;
@@ -182,7 +183,7 @@ public class WelcomeActivity extends AppCompatActivity {
     }
 
     private void showAgreementDialog() {
-        final AlertDialog alertDialog = new AlertDialog.Builder(this).create();
+        final AlertDialog alertDialog = new MaterialAlertDialogBuilder(this).create();
         alertDialog.show();
         alertDialog.setCancelable(false);
         Window window = alertDialog.getWindow();
@@ -218,7 +219,7 @@ public class WelcomeActivity extends AppCompatActivity {
     }
 
     private void showPrivacyDialog() {
-        final AlertDialog alertDialog = new AlertDialog.Builder(this).create();
+        final AlertDialog alertDialog = new MaterialAlertDialogBuilder(this).create();
         alertDialog.show();
         alertDialog.setCancelable(false);
         Window window = alertDialog.getWindow();

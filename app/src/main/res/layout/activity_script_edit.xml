@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    脚本编辑页：
+    顶部 = 名称 / 循环+坐标系 / 「路点列表·原文」切换；
+    中部 = 列表（表单化编辑）与原文文本框二选一；
+    底部 = 插入状态 + 地图选点等操作 + 实时摘要。
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -20,126 +26,44 @@
 
     </com.google.android.material.appbar.AppBarLayout>
 
-    <ScrollView
+    <!-- 顶部：名称 + 选项 + 视图切换 -->
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="12dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp">
+
+        <EditText
+            android:id="@+id/script_name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints="name"
+            android:hint="@string/script_name_hint"
+            android:inputType="text"
+            android:maxLines="1"
+            android:minHeight="48dp" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:paddingStart="12dp"
-            android:paddingTop="8dp"
-            android:paddingEnd="12dp"
-            android:paddingBottom="16dp">
-
-            <EditText
-                android:id="@+id/script_name"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:autofillHints="name"
-                android:hint="@string/script_name_hint"
-                android:inputType="text"
-                android:maxLines="1"
-                android:minHeight="48dp" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
             <CheckBox
                 android:id="@+id/script_loop"
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:minHeight="48dp"
+                android:layout_weight="1"
+                android:minHeight="44dp"
                 android:text="@string/script_loop" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="@string/script_format_tips"
-                android:textSize="12sp" />
-
-            <EditText
-                android:id="@+id/script_text"
-                android:layout_width="match_parent"
-                android:layout_height="160dp"
-                android:layout_marginTop="6dp"
-                android:background="@drawable/border_gray"
-                android:fontFamily="monospace"
-                android:gravity="top|start"
-                android:hint="@string/script_text_hint"
-                android:inputType="textMultiLine|textNoSuggestions"
-                android:padding="8dp"
-                android:scrollbars="vertical"
-                android:textSize="13sp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/script_insert_mode"
-                android:textSize="12sp" />
-
-            <RadioGroup
-                android:id="@+id/script_insert_mode_group"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
-
-                <RadioButton
-                    android:id="@+id/script_mode_walk"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:checked="true"
-                    android:text="@string/script_mode_walk" />
-
-                <RadioButton
-                    android:id="@+id/script_mode_run"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/script_mode_run" />
-
-                <RadioButton
-                    android:id="@+id/script_mode_bike"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/script_mode_bike" />
-            </RadioGroup>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:orientation="horizontal">
-
-                <Button
-                    android:id="@+id/script_map_pick"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/script_map_pick" />
-
-                <Button
-                    android:id="@+id/script_append_current"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/script_append_current" />
-
-                <Button
-                    android:id="@+id/script_check"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/script_check" />
-            </LinearLayout>
 
             <RadioGroup
                 android:id="@+id/script_coord_group"
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_weight="1"
                 android:orientation="horizontal">
 
                 <RadioButton
@@ -157,17 +81,184 @@
                     android:layout_weight="1"
                     android:text="@string/input_position_baidu" />
             </RadioGroup>
+        </LinearLayout>
 
-            <TextView
-                android:id="@+id/script_preview"
+        <RadioGroup
+            android:id="@+id/script_tab_group"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/script_tab_points"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:checked="true"
+                android:text="@string/script_tab_points" />
+
+            <RadioButton
+                android:id="@+id/script_tab_text"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/script_tab_text" />
+        </RadioGroup>
+    </LinearLayout>
+
+    <!-- 中部：列表 / 原文 切换的内容区 -->
+    <FrameLayout
+        android:id="@+id/script_content"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <ListView
+            android:id="@+id/script_point_list"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/script_point_empty"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:padding="24dp"
+            android:text="@string/script_point_empty"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
+        <ScrollView
+            android:id="@+id/script_text_panel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone">
+
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:background="#1100897B"
-                android:padding="8dp"
-                android:textSize="12sp" />
+                android:orientation="vertical"
+                android:paddingStart="12dp"
+                android:paddingTop="6dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="6dp">
 
+                <TextView
+                    android:id="@+id/script_text_tips"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/script_format_tips"
+                    android:textSize="12sp" />
+
+                <EditText
+                    android:id="@+id/script_text"
+                    android:layout_width="match_parent"
+                    android:layout_height="240dp"
+                    android:layout_marginTop="6dp"
+                    android:background="@drawable/border_gray"
+                    android:fontFamily="monospace"
+                    android:gravity="top|start"
+                    android:hint="@string/script_text_hint"
+                    android:inputType="textMultiLine|textNoSuggestions"
+                    android:padding="8dp"
+                    android:scrollbars="vertical"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- 添加路点（只在列表视图显示） -->
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            android:id="@+id/script_point_add"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="16dp"
+            android:contentDescription="@string/script_point_add"
+            app:srcCompat="@drawable/ic_script_add" />
+    </FrameLayout>
+
+    <!-- 底部：插入状态 + 操作 + 实时摘要 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/script_insert_mode"
+            android:textSize="12sp" />
+
+        <RadioGroup
+            android:id="@+id/script_insert_mode_group"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/script_mode_walk"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:checked="true"
+                android:text="@string/script_mode_walk" />
+
+            <RadioButton
+                android:id="@+id/script_mode_run"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/script_mode_run" />
+
+            <RadioButton
+                android:id="@+id/script_mode_bike"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/script_mode_bike" />
+        </RadioGroup>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/script_map_pick"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/script_map_pick" />
+
+            <Button
+                android:id="@+id/script_append_current"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/script_append_current" />
+
+            <Button
+                android:id="@+id/script_check"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/script_check" />
         </LinearLayout>
-    </ScrollView>
+
+        <TextView
+            android:id="@+id/script_preview"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="#1100897B"
+            android:padding="8dp"
+            android:textSize="12sp" />
+    </LinearLayout>
 
 </LinearLayout>

@@ -4,6 +4,12 @@
     <color name="colorPrimaryDark">#ff008577</color>
     <color name="colorAccent">#ff00897B</color>
 
+    <!-- Material 3 色板：由原青绿主色展开的容器色（styles.xml 里映射到 M3 属性） -->
+    <color name="m3_primary_container">#ff80e1d4</color>
+    <color name="m3_on_primary_container">#ff00201d</color>
+    <color name="m3_secondary_container">#ffcceee8</color>
+    <color name="m3_on_secondary_container">#ff00201b</color>
+
     <color name="white">#ffffff</color> <!-- 白色 -->
     <color name="ivory">#fffff0</color> <!-- 象牙色 -->
     <color name="lightyellow">#ffffe0</color> <!-- 亮黄色 -->

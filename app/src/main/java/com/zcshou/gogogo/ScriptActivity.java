@@ -4,16 +4,19 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.provider.Settings;
 import android.view.LayoutInflater;
+import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
+import android.widget.CheckBox;
 import android.widget.ImageButton;
 import android.widget.ListView;
 import android.widget.Spinner;
@@ -25,6 +28,7 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.widget.Toolbar;
 import androidx.core.content.ContextCompat;
 
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.zcshou.script.ScriptParser;
 import com.zcshou.script.ScriptRoute;
@@ -32,22 +36,39 @@ import com.zcshou.script.ScriptStore;
 import com.zcshou.script.ScriptWaypoint;
 import com.zcshou.service.ServiceGo;
 import com.zcshou.utils.GoUtils;
+import com.zcshou.utils.ShareUtils;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 脚本模式：管理脚本并启动“按脚本预设自动移动”的模拟位置。
  *
- * <p>列表里可以直接开始播放某个脚本，长按删除；点条目进入编辑页。</p>
+ * <p>列表里点 ▶ 开始播放（播放后自动退回地图），点条目或铅笔进入编辑页；
+ * 删除走工具栏按钮：点一次进入勾选模式，勾选后再次点删除确认。
+ * 工具栏还提供脚本的导入 / 导出。</p>
  */
 public class ScriptActivity extends BaseActivity {
     /** 编辑页返回时用来判断是否需要刷新 */
     private static final int REQUEST_EDIT = 1001;
+    /** 导入脚本选完文件 */
+    private static final int REQUEST_IMPORT = 1002;
 
     private ScriptStore mStore;
     private final List<ScriptRoute> mRoutes = new ArrayList<>();
     private ScriptAdapter mAdapter;
+
+    /** 勾选删除模式 */
+    private boolean mSelectMode;
+    /** 勾选中的脚本 id */
+    private final Set<String> mCheckedIds = new LinkedHashSet<>();
 
     private ListView mListView;
     private TextView mNoScriptText;
@@ -152,10 +173,13 @@ public class ScriptActivity extends BaseActivity {
         mAdapter = new ScriptAdapter();
         mListView.setAdapter(mAdapter);
 
-        mListView.setOnItemClickListener((parent, view, position, id) -> openEditor(mRoutes.get(position)));
-        mListView.setOnItemLongClickListener((parent, view, position, id) -> {
-            confirmDelete(mRoutes.get(position));
-            return true;
+        // 勾选模式下点条目 = 切换勾选；正常模式点条目 = 进编辑页（长按删除已改为工具栏按钮勾选删除）
+        mListView.setOnItemClickListener((parent, view, position, id) -> {
+            if (mSelectMode) {
+                toggleChecked(mRoutes.get(position).id);
+            } else {
+                openEditor(mRoutes.get(position));
+            }
         });
 
         FloatingActionButton addButton = findViewById(R.id.script_add);
@@ -250,11 +274,6 @@ public class ScriptActivity extends BaseActivity {
         bindServiceIfNeeded();
     }
 
-    /** 刚刚主动启动过服务，此时不必再判断存储状态 */
-    private void bindAfterStart() {
-        bindServiceIfNeeded();
-    }
-
     private void bindServiceIfNeeded() {
         if (mBound) {
             return;
@@ -293,21 +312,180 @@ public class ScriptActivity extends BaseActivity {
     }
 
     @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.menu_script_list, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onPrepareOptionsMenu(Menu menu) {
+        MenuItem cancel = menu.findItem(R.id.action_script_select_cancel);
+        if (cancel != null) {
+            cancel.setVisible(mSelectMode);
+        }
+        return super.onPrepareOptionsMenu(menu);
+    }
+
+    @Override
     public boolean onOptionsItemSelected(@NonNull MenuItem item) {
         if (item.getItemId() == android.R.id.home) {
             finish();
             return true;
         }
+        if (item.getItemId() == R.id.action_script_delete) {
+            handleDeleteMenu();
+            return true;
+        }
+        if (item.getItemId() == R.id.action_script_select_cancel) {
+            exitSelectMode();
+            return true;
+        }
+        if (item.getItemId() == R.id.action_script_export) {
+            exportScripts();
+            return true;
+        }
+        if (item.getItemId() == R.id.action_script_import) {
+            importScripts();
+            return true;
+        }
         return super.onOptionsItemSelected(item);
     }
 
-    /** 编辑页保存后回来刷新列表 */
+    /*============================== 勾选删除 ==============================*/
+
+    /** 删除按钮：第一次点进入勾选模式，已勾选时弹确认后删除 */
+    private void handleDeleteMenu() {
+        if (!mSelectMode) {
+            mSelectMode = true;
+            mCheckedIds.clear();
+            notifyAdapter();
+            invalidateOptionsMenu();
+            GoUtils.DisplayToast(this, getResources().getString(R.string.script_select_hint));
+            return;
+        }
+
+        if (mCheckedIds.isEmpty()) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.script_select_none));
+            return;
+        }
+
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.script_delete_title)
+                .setMessage(getResources().getString(R.string.script_delete_checked, mCheckedIds.size()))
+                .setPositiveButton(R.string.script_delete_title, (dialog, which) -> deleteChecked())
+                .setNegativeButton(R.string.input_position_cancel, (dialog, which) -> {
+                })
+                .show();
+    }
+
+    private void deleteChecked() {
+        int count = mCheckedIds.size();
+        for (String id : mCheckedIds) {
+            mStore.delete(id);
+            if (id.equals(mPlayingScriptId)) {
+                stopPlaying();
+            }
+        }
+        mCheckedIds.clear();
+        exitSelectMode();
+        refreshList();
+        GoUtils.DisplayToast(this, getResources().getString(R.string.script_deleted_n, count));
+    }
+
+    private void toggleChecked(String id) {
+        if (!mCheckedIds.remove(id)) {
+            mCheckedIds.add(id);
+        }
+        notifyAdapter();
+    }
+
+    private void exitSelectMode() {
+        mSelectMode = false;
+        mCheckedIds.clear();
+        notifyAdapter();
+        invalidateOptionsMenu();
+    }
+
+    /*============================== 导入 / 导出 ==============================*/
+
+    /** 把全部脚本导出成 JSON 文件，并调起系统分享 */
+    private void exportScripts() {
+        if (mStore.loadAll().isEmpty()) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.script_list_empty));
+            return;
+        }
+
+        try {
+            File dir = new File(getCacheDir(), "scripts");
+            if (!dir.exists() && !dir.mkdirs()) {
+                throw new IOException("cannot create dir");
+            }
+            File file = new File(dir, "gogogo_scripts.json");
+            try (FileOutputStream out = new FileOutputStream(file)) {
+                out.write(mStore.exportJson().getBytes(StandardCharsets.UTF_8));
+            }
+
+            ShareUtils.shareFile(this, file, getResources().getString(R.string.script_export));
+        } catch (Exception e) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.script_export_fail));
+        }
+    }
+
+    /** 从系统文件选择器挑一个导出的 JSON 并导入 */
+    private void importScripts() {
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
+            intent.putExtra(Intent.EXTRA_MIME_TYPES,
+                    new String[] {"application/json", "text/plain", "application/octet-stream"});
+            startActivityForResult(Intent.createChooser(intent,
+                    getResources().getString(R.string.script_import)), REQUEST_IMPORT);
+        } catch (Exception e) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.script_import_fail));
+        }
+    }
+
+    private void handleImportResult(Intent data) {
+        if (data == null || data.getData() == null) {
+            return;
+        }
+
+        Uri uri = data.getData();
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) {
+                GoUtils.DisplayToast(this, getResources().getString(R.string.script_import_fail));
+                return;
+            }
+
+            java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+            byte[] chunk = new byte[4096];
+            int read;
+            while ((read = in.read(chunk)) != -1) {
+                buffer.write(chunk, 0, read);
+            }
+
+            int count = mStore.importJson(new String(buffer.toByteArray(), StandardCharsets.UTF_8));
+            if (count > 0) {
+                refreshList();
+                GoUtils.DisplayToast(this, getResources().getString(R.string.script_import_ok, count));
+            } else {
+                GoUtils.DisplayToast(this, getResources().getString(R.string.script_import_fail));
+            }
+        } catch (Exception e) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.script_import_fail));
+        }
+    }
+
+    /** 编辑页保存后刷新列表；导入选完文件后解析入库 */
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
         if (requestCode == REQUEST_EDIT) {
             refreshList();
+        } else if (requestCode == REQUEST_IMPORT && resultCode == RESULT_OK) {
+            handleImportResult(data);
         }
     }
 
@@ -387,19 +565,21 @@ public class ScriptActivity extends BaseActivity {
             mPlayingIndex = 0;
             notifyAdapter();
 
-            // 服务是异步起来的，稍后再绑定一次以获取播放进度回调
-            mListView.postDelayed(this::bindAfterStart, 800);
-
-            // 已经绑定着就立刻校验一次；还没绑上就记下来，等连接回调里兜底补启动，
+            // 已经绑定着就立刻校验一次；还没绑上就立刻绑定，连接回调里兜底补启动，
             // 保证“点开始”最终一定会真的进入播放（不只依赖 onStartCommand 送达）
             mPendingStartId = null;
             if (mServiceBinder != null) {
                 ensureScriptPlaying(route.id);
             } else {
                 mPendingStartId = route.id;
+                bindServiceIfNeeded();
             }
 
             GoUtils.DisplayToast(this, getResources().getString(R.string.script_start));
+
+            // 播放已开始：自动退回地图主界面。本地服务连接通常几十毫秒就回来，
+            // 留 500ms 让“连上后兜底启动”先跑完再退
+            mListView.postDelayed(this::finish, 500);
         } catch (Exception e) {
             GoUtils.DisplayToast(this, getResources().getString(R.string.script_start_fail));
         }
@@ -412,32 +592,17 @@ public class ScriptActivity extends BaseActivity {
         }
 
         try {
-            boolean playing = mServiceBinder.getScriptState() == ServiceGo.SCRIPT_STATE_PLAYING
-                    && scriptId.equals(mServiceBinder.getRunningScriptId());
-            if (!playing) {
-                mServiceBinder.startScript(scriptId);
+            // 不判断“是否已在播”：状态可能残留（PLAYING 但播放器没在跑），误判会跳过启动。
+            // 重复启动是幂等的；失败给明确提示，不再静默
+            boolean ok = mServiceBinder.startScript(scriptId);
+            if (ok) {
+                mPlayingScriptId = scriptId;
+            } else {
+                GoUtils.DisplayToast(this, getResources().getString(R.string.script_start_fail));
             }
-            mPlayingScriptId = scriptId;
         } catch (Exception e) {
             // 忽略服务异常
         }
-    }
-
-    private void confirmDelete(ScriptRoute route) {
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.script_delete_title)
-                .setMessage(getResources().getString(R.string.script_delete_message, safeName(route)))
-                .setPositiveButton(R.string.script_delete_title, (dialog, which) -> {
-                    mStore.delete(route.id);
-                    if (route.id.equals(mPlayingScriptId)) {
-                        stopPlaying();
-                    }
-                    refreshList();
-                    GoUtils.DisplayToast(ScriptActivity.this, getResources().getString(R.string.script_delete_ok));
-                })
-                .setNegativeButton(R.string.input_position_cancel, (dialog, which) -> {
-                })
-                .show();
     }
 
     /** 正在播放的脚本被删除时，顺手停掉播放 */
@@ -509,6 +674,15 @@ public class ScriptActivity extends BaseActivity {
             TextView status = view.findViewById(R.id.script_item_status);
             ImageButton edit = view.findViewById(R.id.script_item_edit);
             ImageButton start = view.findViewById(R.id.script_item_start);
+            CheckBox check = view.findViewById(R.id.script_item_check);
+
+            // 勾选删除模式：显示复选框，隐藏“开始 / 编辑”，条目点击即切换勾选
+            check.setVisibility(mSelectMode ? View.VISIBLE : View.GONE);
+            check.setChecked(mCheckedIds.contains(route.id));
+            check.setOnClickListener(v -> toggleChecked(route.id));
+            int actionVisibility = mSelectMode ? View.GONE : View.VISIBLE;
+            start.setVisibility(actionVisibility);
+            edit.setVisibility(actionVisibility);
 
             name.setText(safeName(route));
 

@@ -232,6 +232,11 @@ public final class ScriptTextEditor {
         return text.substring(start, end);
     }
 
+    /** 用新内容整体替换某一行（表单保存路点时使用），行不存在时原样返回 */
+    public static String setLine(String text, int lineIndex, String newLine) {
+        return replaceLine(text, lineIndex, newLine);
+    }
+
     private static String replaceLine(String text, int lineIndex, String newLine) {
         int start = lineStart(text, lineIndex);
         int end = lineEnd(text, lineIndex);

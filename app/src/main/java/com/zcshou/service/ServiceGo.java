@@ -296,9 +296,9 @@ public class ServiceGo extends Service {
             mJoyStick.setListener(new JoyStick.JoyStickClickListener() {
                 @Override
                 public void onMoveInfo(double speed, double disLng, double disLat, double angle) {
-                    // 脚本正在播放：摇杆位移直接忽略，位置由脚本说了算。
+                    // 脚本正在接管位置：摇杆位移直接忽略，位置由脚本说了算。
                     // 否则手动位移写进去不到 100ms 就被脚本下一帧覆盖，两边打架
-                    if (mScriptState == SCRIPT_STATE_PLAYING) {
+                    if (isScriptDrivingPosition()) {
                         return;
                     }
 
@@ -314,9 +314,9 @@ public class ServiceGo extends Service {
 
                 @Override
                 public void onPositionInfo(double lng, double lat, double alt) {
-                    // 脚本正在播放：忽略这次选点传送并给出提示。
+                    // 脚本正在接管位置：忽略这次选点传送并给出提示。
                     // 以前会直接改位置——表现就是“位置被拉回选点处、脚本移动被打断”
-                    if (mScriptState == SCRIPT_STATE_PLAYING) {
+                    if (isScriptDrivingPosition()) {
                         GoUtils.DisplayToast(ServiceGo.this,
                                 getString(R.string.joystick_ignore_teleport));
                         return;
@@ -325,6 +325,10 @@ public class ServiceGo extends Service {
                     mCurLng = lng;
                     mCurLat = lat;
                     mCurAlt = alt;
+                    // 与 binder.setPosition 的手动传送保持一致：速度、方向复位，
+                    // 否则“跑完脚本（speed=0）再手动选点”会一直注入 speed=0，上层应用会判定为没在移动
+                    mSpeed = 1.2;
+                    mCurBea = DEFAULT_BEA;
                     saveLastPosition();
                 }
             });
@@ -476,6 +480,18 @@ public class ServiceGo extends Service {
     }
 
     /**
+     * 脚本此刻是否真正在接管位置：状态与播放器双确认。
+     *
+     * <p>只看 mScriptState 会被“状态残留”骗到（状态是 PLAYING、播放器其实早已停了），
+     * 表现为摇杆怎么推都没反应；双确认后，残留状态既锁不住摇杆，也会在下次启动时被纠正。</p>
+     */
+    private boolean isScriptDrivingPosition() {
+        return mScriptState == SCRIPT_STATE_PLAYING
+                && mScriptPlayer != null
+                && mScriptPlayer.isPlaying();
+    }
+
+    /**
      * 开始播放指定 id 的脚本。
      *
      * <p>位置对齐、状态切换、循环都由 {@link ScriptPlayer} 负责，这里只做加载与启动。</p>
@@ -488,6 +504,12 @@ public class ServiceGo extends Service {
         ScriptRoute route = mScriptStore.load(scriptId);
         if (route == null || route.points.isEmpty()) {
             XLog.e("SERVICEGO: script not found - " + scriptId);
+            // 加载失败也把状态拉回 IDLE：否则“状态停在 PLAYING 但播放器没在跑”的残留
+            // 会同时锁死摇杆（被当成播放中忽略）并让界面的兜底启动误判“已在播”而跳过
+            mScriptState = SCRIPT_STATE_IDLE;
+            if (mScriptListener != null) {
+                mScriptListener.onScriptStopped();
+            }
             return;
         }
 

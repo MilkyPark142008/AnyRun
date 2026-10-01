@@ -124,6 +124,61 @@ public class ScriptStore {
         return loadAll().isEmpty();
     }
 
+    /*============================== 导入 / 导出 ==============================*/
+
+    /** 把全部脚本导出为 JSON 文本（与内部存储格式一致，可直接再导回） */
+    public String exportJson() {
+        JSONArray array = new JSONArray();
+        for (ScriptRoute route : loadAll()) {
+            try {
+                array.put(toJson(route));
+            } catch (JSONException e) {
+                XLog.e("SCRIPT: export failed");
+            }
+        }
+
+        return array.toString();
+    }
+
+    /**
+     * 导入 JSON 文本里的脚本（数组或单个对象均可）。
+     *
+     * <p>按 id 覆盖：同 id 视为同一条脚本的更新，重复导入不会产生重复条目。</p>
+     *
+     * @return 成功导入的条数；格式非法返回 -1
+     */
+    public int importJson(String json) {
+        if (json == null || json.trim().isEmpty()) {
+            return -1;
+        }
+
+        String trimmed = json.trim();
+        if (trimmed.startsWith("{")) {
+            trimmed = "[" + trimmed + "]";
+        }
+
+        try {
+            JSONArray array = new JSONArray(trimmed);
+            int count = 0;
+            for (int i = 0; i < array.length(); i++) {
+                JSONObject object = array.optJSONObject(i);
+                if (object == null) {
+                    continue;
+                }
+
+                ScriptRoute route = fromJson(object);
+                if (route != null) {
+                    save(route);
+                    count++;
+                }
+            }
+            return count;
+        } catch (JSONException e) {
+            XLog.e("SCRIPT: import failed");
+            return -1;
+        }
+    }
+
     private void writeAll(List<ScriptRoute> routes) {
         JSONArray array = new JSONArray();
         for (ScriptRoute route : routes) {

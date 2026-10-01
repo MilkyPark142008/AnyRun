@@ -65,6 +65,7 @@ import org.osmdroid.views.overlay.Polyline;
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider;
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay;
 
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.navigation.NavigationView;
 import com.google.android.material.snackbar.Snackbar;
@@ -562,7 +563,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 File file = new File(getExternalFilesDir("Logs"), GoApplication.LOG_FILE_NAME);
                 ShareUtils.shareFile(this, file, item.getTitle().toString());
             } else if (id == R.id.nav_contact) {
-                Uri uri = Uri.parse("https://gitee.com/itexp/gogogo/issues");
+                Uri uri = Uri.parse("https://github.com/MilkyPark142008/GoGoGo");
                 Intent intent = new Intent(Intent.ACTION_VIEW, uri);
                 startActivity(intent);
             }
@@ -832,53 +833,39 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     }
 
     /**
-     * 手动输入经纬度定位。
+     * 手动输入经纬度定位：经度、纬度分栏输入。
      *
-     * <p>原实现把“经度”“纬度”拆成两个输入框，但布局里只有第一个框有 id、第二个框拿不到，
-     * 也没有提供粘贴整串坐标的入口，实际用起来经常出现“输入了但没定位”。现在改为
-     * 单个输入框 + 自动识别（{@link MapUtils#parseLngLat}），并保留坐标系选择。</p>
+     * <p>剪贴板（或“粘贴”按钮）里的“经度,纬度”整串坐标会自动分填到两格；
+     * 旧版是单框 + 自动识别，容易看岔格式，改成两格后所见即所得。</p>
      */
     private void showInputPositionDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+        AlertDialog.Builder builder = new MaterialAlertDialogBuilder(MainActivity.this);
         builder.setTitle(R.string.input_button);
         View view = LayoutInflater.from(MainActivity.this).inflate(R.layout.location_input, null);
         builder.setView(view);
 
         final AlertDialog dialog = builder.show();
 
-        EditText input = view.findViewById(R.id.input_position_text);
+        final EditText lngEdit = view.findViewById(R.id.input_position_lng);
+        final EditText latEdit = view.findViewById(R.id.input_position_lat);
         RadioButton rbGps = view.findViewById(R.id.pos_type_gps);
         Button btnPaste = view.findViewById(R.id.input_position_paste);
 
-        // 剪贴板里如果有经纬度，直接填好，省去手动粘贴
-        String clipboard = getClipboardText();
-        if (MapUtils.parseLngLat(clipboard) != null) {
-            input.setText(clipboard);
-            input.setSelection(input.getText().length());
-        }
+        // 剪贴板里如果有经纬度，直接分填两格，省去手动粘贴
+        fillLngLatFromClipboard(lngEdit, latEdit);
 
         btnPaste.setOnClickListener(v -> {
-            String text = getClipboardText();
-            if (TextUtils.isEmpty(text)) {
-                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.jump_position_clip_empty));
-                return;
+            if (!fillLngLatFromClipboard(lngEdit, latEdit)) {
+                GoUtils.DisplayToast(MainActivity.this,
+                        getResources().getString(R.string.input_position_clip_invalid));
             }
-            input.setText(text);
-            input.setSelection(input.getText().length());
         });
 
         Button btnGo = view.findViewById(R.id.input_position_ok);
         btnGo.setOnClickListener(v2 -> {
-            String text = input.getText().toString().trim();
-            if (TextUtils.isEmpty(text)) {
-                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.input_position_empty));
-                return;
-            }
-
-            double[] lngLat = MapUtils.parseLngLat(text);
+            double[] lngLat = readLngLatFields(lngEdit, latEdit);
             if (lngLat == null) {
-                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.app_error_input));
-                return;
+                return;     // 校验失败的提示已经在 readLngLatFields 里发过了
             }
 
             if (rbGps.isChecked()) {
@@ -903,6 +890,61 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         btnCancel.setOnClickListener(v1 -> dialog.dismiss());
     }
 
+    /**
+     * 把剪贴板里的经纬度解析出来分填到两个输入框。
+     *
+     * @return 解析成功返回 true；剪贴板为空或不是经纬度返回 false
+     */
+    private boolean fillLngLatFromClipboard(EditText lngEdit, EditText latEdit) {
+        double[] lngLat = MapUtils.parseLngLat(getClipboardText());
+        if (lngLat == null) {
+            return false;
+        }
+
+        lngEdit.setText(formatCoordInput(lngLat[0]));
+        latEdit.setText(formatCoordInput(lngLat[1]));
+        lngEdit.setSelection(lngEdit.getText().length());
+        return true;
+    }
+
+    /** 输入框里的坐标文本：保留 6 位精度并去掉多余的 0（116.397000 -> 116.397） */
+    private static String formatCoordInput(double value) {
+        String text = String.format(java.util.Locale.US, "%.6f", value);
+        text = text.replaceFirst("0+$", "").replaceFirst("\\.$", "");
+        return text.isEmpty() ? "0" : text;
+    }
+
+    /**
+     * 读取并校验经度 / 纬度两个输入框。
+     *
+     * @return {经度, 纬度}；非法时弹提示并返回 null
+     */
+    private double[] readLngLatFields(EditText lngEdit, EditText latEdit) {
+        String lngText = lngEdit.getText().toString().trim();
+        String latText = latEdit.getText().toString().trim();
+        if (TextUtils.isEmpty(lngText) || TextUtils.isEmpty(latText)) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.input_position_empty));
+            return null;
+        }
+
+        double lng;
+        double lat;
+        try {
+            lng = Double.parseDouble(lngText);
+            lat = Double.parseDouble(latText);
+        } catch (NumberFormatException e) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_input));
+            return null;
+        }
+
+        if (lng < -180.0 || lng > 180.0 || lat < -90.0 || lat > 90.0) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.coord_range_error));
+            return null;
+        }
+
+        return new double[] {lng, lat};
+    }
+
     /*============================== 跳转经纬度 / 地址 ==============================*/
 
     /**
@@ -912,7 +954,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
      * 其余内容当作地址，交给 OpenStreetMap 检索后选中第一条结果。</p>
      */
     private void showJumpDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+        AlertDialog.Builder builder = new MaterialAlertDialogBuilder(MainActivity.this);
         builder.setTitle(getResources().getString(R.string.jump_position_title));
         View view = LayoutInflater.from(MainActivity.this).inflate(R.layout.location_jump, null);
         builder.setView(view);
@@ -1552,7 +1594,9 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
      * 校验服务端确实在播放指定脚本；没在播就用 binder 兜底启动一次。
      *
      * <p>“点开始不动”的兜底：不管 onStartCommand 有没有送到，只要服务连上了，
-     * 最终一定会真正进入播放状态。</p>
+     * 最终一定会真正进入播放状态。这里不再判断“是否已在播”——停止 → 摇杆 → 再开始的
+     * 时序里服务端状态可能残留，误判“已在播”会直接跳过启动；重复启动是幂等的。
+     * 启动失败（脚本数据异常等）给明确提示，不再静默。</p>
      */
     private void ensureScriptPlaying(String scriptId) {
         if (mServiceBinder == null || TextUtils.isEmpty(scriptId)) {
@@ -1560,11 +1604,11 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
 
         try {
-            boolean playing = mServiceBinder.getScriptState() == ServiceGo.SCRIPT_STATE_PLAYING
-                    && scriptId.equals(mServiceBinder.getRunningScriptId());
-            if (!playing) {
-                mServiceBinder.startScript(scriptId);
+            boolean ok = mServiceBinder.startScript(scriptId);
+            if (ok) {
                 mRunningScriptId = scriptId;
+            } else {
+                GoUtils.DisplayToast(this, getResources().getString(R.string.script_start_fail));
             }
         } catch (Exception e) {
             XLog.e("ERROR: ensureScriptPlaying", e);
@@ -1767,7 +1811,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         // 播放中误碰一下按钮，位置就跳回标记点、脚本也被顺手停掉。
         // 现在先弹确认：取消则什么都不动，脚本继续走。
         if (isScriptPlaying()) {
-            new AlertDialog.Builder(this)
+            new MaterialAlertDialogBuilder(this)
                     .setTitle(R.string.script_stop_confirm_title)
                     .setMessage(R.string.script_stop_confirm_message)
                     .setPositiveButton(R.string.script_stop_confirm_ok,
@@ -1996,7 +2040,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             }
         });
         mSearchHistoryList.setOnItemLongClickListener((parent, view, position, id) -> {
-            new AlertDialog.Builder(MainActivity.this)
+            new MaterialAlertDialogBuilder(MainActivity.this)
                     .setTitle("警告")//这里是表头的内容
                     .setMessage("确定要删除该项搜索记录吗?")//这里是中间显示的具体信息
                     .setPositiveButton("确定",(dialog, which) -> {
