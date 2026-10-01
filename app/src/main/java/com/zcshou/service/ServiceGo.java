@@ -38,6 +38,7 @@ import com.zcshou.script.ScriptPlayer;
 import com.zcshou.script.ScriptRoute;
 import com.zcshou.script.ScriptStore;
 import com.zcshou.script.ScriptWaypoint;
+import com.zcshou.utils.GoUtils;
 
 public class ServiceGo extends Service {
     // 定位相关变量
@@ -295,6 +296,12 @@ public class ServiceGo extends Service {
             mJoyStick.setListener(new JoyStick.JoyStickClickListener() {
                 @Override
                 public void onMoveInfo(double speed, double disLng, double disLat, double angle) {
+                    // 脚本正在播放：摇杆位移直接忽略，位置由脚本说了算。
+                    // 否则手动位移写进去不到 100ms 就被脚本下一帧覆盖，两边打架
+                    if (mScriptState == SCRIPT_STATE_PLAYING) {
+                        return;
+                    }
+
                     mSpeed = speed;
                     // 根据当前的经纬度和距离，计算下一个经纬度
                     // Latitude: 1 deg = 110.574 km // 纬度的每度的距离大约为 110.574km
@@ -307,9 +314,18 @@ public class ServiceGo extends Service {
 
                 @Override
                 public void onPositionInfo(double lng, double lat, double alt) {
+                    // 脚本正在播放：忽略这次选点传送并给出提示。
+                    // 以前会直接改位置——表现就是“位置被拉回选点处、脚本移动被打断”
+                    if (mScriptState == SCRIPT_STATE_PLAYING) {
+                        GoUtils.DisplayToast(ServiceGo.this,
+                                getString(R.string.joystick_ignore_teleport));
+                        return;
+                    }
+
                     mCurLng = lng;
                     mCurLat = lat;
                     mCurAlt = alt;
+                    saveLastPosition();
                 }
             });
             mJoyStick.show();

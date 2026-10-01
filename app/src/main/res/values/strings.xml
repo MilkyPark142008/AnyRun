@@ -205,6 +205,10 @@
     <string name="script_check_warn">校验通过（有提示）：\n%1$s</string>
     <string name="script_need_name">请填写脚本名称</string>
     <string name="script_no_location_yet">暂时拿不到当前位置，请先启动一次模拟位置</string>
+    <string name="script_stop_confirm_title">正在播放脚本</string>
+    <string name="script_stop_confirm_message">当前正沿脚本路线移动，继续操作会停止脚本。确定继续吗？</string>
+    <string name="script_stop_confirm_ok">停止脚本并继续</string>
+    <string name="joystick_ignore_teleport">正在播放脚本，已忽略传送</string>
 
     <!-- 地图底图 -->
     <string name="map_pic_sate">卫星图</string>

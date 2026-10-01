@@ -1763,6 +1763,33 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             return;
         }
 
+        // 脚本正在播放：传送 / 终止模拟都会打断路线移动。以前这里是“静默打断”，
+        // 播放中误碰一下按钮，位置就跳回标记点、脚本也被顺手停掉。
+        // 现在先弹确认：取消则什么都不动，脚本继续走。
+        if (isScriptPlaying()) {
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.script_stop_confirm_title)
+                    .setMessage(R.string.script_stop_confirm_message)
+                    .setPositiveButton(R.string.script_stop_confirm_ok,
+                            (dialog, which) -> doGoLocationAction(v))
+                    .setNegativeButton(R.string.input_position_cancel, null)
+                    .show();
+            return;
+        }
+
+        doGoLocationAction(v);
+    }
+
+    /** 脚本是否正在播放（服务没绑定时用本地缓存兜底） */
+    private boolean isScriptPlaying() {
+        if (mServiceBinder != null) {
+            return mServiceBinder.getScriptState() == ServiceGo.SCRIPT_STATE_PLAYING;
+        }
+        return mRunningScriptId != null;
+    }
+
+    /** 真正执行“传送 / 终止模拟”（doGoLocation 前置检查与脚本确认之后的动作） */
+    private void doGoLocationAction(View v) {
         if (isMockServStart) {
             if (mMarkLatLngMap == null) {
                 stopGoLocation();
