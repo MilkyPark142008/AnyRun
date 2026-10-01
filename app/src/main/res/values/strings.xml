@@ -72,7 +72,11 @@
 
     <!-- 移动相关参数 -->
     <string name="setting_group_move">移动</string>
-    <string name="setting_joystick_type">摇杆类型</string>
+    <string name="setting_joystick_type">移动类型</string>
+    <string name="move_mode_click">点击移动</string>
+    <string name="move_mode_joystick">摇杆移动</string>
+    <string name="click_move_arrived">已到达点击位置</string>
+    <string name="click_move_script_busy">正在播放脚本，点击移动已忽略</string>
     <string name="setting_walk">步行速度(米/秒)</string>
     <string name="setting_walk_default">1.2</string>
     <string name="setting_run">跑步速度(米/秒)</string>

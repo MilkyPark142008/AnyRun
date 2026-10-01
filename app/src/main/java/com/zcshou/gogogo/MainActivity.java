@@ -163,6 +163,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     private String mPendingScriptId;
     /** 已经发出“停止移动”、但服务连接还没回来时的挂起标记，连上后再补一次停止 */
     private boolean mPendingStop;
+    /** 左下角开关的状态：true = 点击移动，false = 摇杆移动（默认由“移动类型”设置决定） */
+    private boolean mClickMoveEnabled;
+    /** 左下角“点击移动 ⇄ 摇杆移动”开关，模拟位置运行期间才显示 */
+    private Button mClickMoveSwitch;
     /*============================== 主界面连续选点（连贯移动） ==============================*/
     /**
      * 主界面选点生成的路线在脚本存储里的固定 id。
@@ -228,6 +232,8 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
         initRoutePicking();
 
+        initClickMoveSwitch();
+
         // 恢复旋屏前还没开始移动的选点
         if (savedInstanceState != null) {
             mRoutePoints.clear();
@@ -259,6 +265,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             if (mButtonStart != null) {
                 mButtonStart.setImageResource(isMockServStart ? R.drawable.ic_fly : R.drawable.ic_position);
             }
+            refreshClickMoveSwitch();
         }
 
         mConnection = new ServiceConnection() {
@@ -268,6 +275,8 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 // 脚本播放状态变化时刷新入口按钮（脚本播放可能在脚本模式页面里启动）
                 mServiceBinder.setScriptListener(mScriptListener);
                 syncStateWithService();
+                // 每次连上都把当前的“点击移动 ⇄ 摇杆移动”开关状态推给服务端
+                applyClickMoveMode();
                 updateScriptButton();
             }
 
@@ -343,6 +352,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             // 存储里没有运行记录，本地残留的“正在播放”一定是过期状态，纠正掉
             // （否则按钮会一直显示“停止移动”，点下去却是停一个没在跑的脚本）
             mRunningScriptId = null;
+        }
+        if (isMockServStart && mServiceBinder == null) {
+            // 单点模拟在跑但还没绑上：先绑好，否则 FAB 首次按下只补绑、位置要第二次才生效
+            bindServiceIfNeeded();
         }
         updateScriptButton();
 
@@ -656,9 +669,14 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
              */
             @Override
             public boolean singleTapConfirmedHelper(GeoPoint p) {
-                // 路线选点模式：点地图 = 往路线末尾加一个路点，不改动原来的单点传送标记
+                // 路线选点模式优先：点地图 = 往路线末尾加一个路点，不改动原来的单点传送标记
                 if (mRoutePicking) {
                     addRoutePoint(p.getLongitude(), p.getLatitude());
+                    return true;
+                }
+
+                // 点击移动：开关处于“点击移动”且模拟位置在跑时，点哪朝哪走（脚本播放中会提示并忽略）
+                if (handleClickMoveTap(p)) {
                     return true;
                 }
 
@@ -843,9 +861,6 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             }
         });
 
-        ImageButton jumpPosBtn = this.findViewById(R.id.jump_pos);
-        jumpPosBtn.setOnClickListener(v -> showJumpDialog());
-
         ImageButton inputPosBtn = this.findViewById(R.id.input_pos);
         inputPosBtn.setOnClickListener(v -> showInputPositionDialog());
     }
@@ -965,55 +980,6 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
     /*============================== 跳转经纬度 / 地址 ==============================*/
 
-    /**
-     * 跳转位置：粘贴（或输入）经纬度、地址，直接在地图上选中并跳过去。
-     *
-     * <p>输入的是两个数值时按经纬度处理（默认“经度,纬度”，只有一个数值超过 90 度时自动识别）；
-     * 其余内容当作地址，交给 OpenStreetMap 检索后选中第一条结果。</p>
-     */
-    private void showJumpDialog() {
-        AlertDialog.Builder builder = new MaterialAlertDialogBuilder(MainActivity.this);
-        builder.setTitle(getResources().getString(R.string.jump_position_title));
-        View view = LayoutInflater.from(MainActivity.this).inflate(R.layout.location_jump, null);
-        builder.setView(view);
-        final AlertDialog dialog = builder.show();
-
-        final EditText input = view.findViewById(R.id.jump_position_input);
-        final RadioButton rbBD = view.findViewById(R.id.jump_type_bd);
-        Button btnPaste = view.findViewById(R.id.jump_position_paste);
-
-        // 剪贴板里如果是经纬度就直接填好，省去手动粘贴
-        String clipboard = getClipboardText();
-        if (clipboard != null && MapUtils.parseLngLat(clipboard) != null) {
-            input.setText(clipboard);
-            input.setSelection(input.getText().length());
-        }
-
-        btnPaste.setOnClickListener(v -> {
-            String text = getClipboardText();
-            if (TextUtils.isEmpty(text)) {
-                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.jump_position_clip_empty));
-                return;
-            }
-            input.setText(text);
-            input.setSelection(input.getText().length());
-        });
-
-        Button btnJump = view.findViewById(R.id.jump_position_ok);
-        btnJump.setOnClickListener(v -> {
-            String text = input.getText().toString().trim();
-            if (TextUtils.isEmpty(text)) {
-                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.jump_position_empty));
-                return;
-            }
-            dialog.dismiss();
-            doJump(text, rbBD.isChecked());
-        });
-
-        Button btnCancel = view.findViewById(R.id.jump_position_cancel);
-        btnCancel.setOnClickListener(v -> dialog.dismiss());
-    }
-
     /** 读取剪贴板文本，失败或为空时返回 null */
     private String getClipboardText() {
         try {
@@ -1032,67 +998,6 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         } catch (Exception e) {
             XLog.e("ERROR: getClipboardText");
             return null;
-        }
-    }
-
-    /**
-     * 执行跳转：能解析成经纬度就按坐标跳，否则按地址检索
-     *
-     * @param isBd09 经纬度输入是否为 BD-09 坐标系
-     */
-    private void doJump(String text, boolean isBd09) {
-        double[] lngLat = MapUtils.parseLngLat(text);
-
-        if (lngLat != null) {
-            if (isBd09) {
-                jumpToBd09(lngLat[0], lngLat[1], text);
-            } else {
-                double[] bd09 = MapUtils.wgs2bd09(lngLat[0], lngLat[1]);
-                jumpToBd09(bd09[0], bd09[1], text);
-            }
-            GoUtils.DisplayToast(this, getResources().getString(R.string.jump_position_done));
-            return;
-        }
-
-        if (mGeoCoder == null) {
-            GoUtils.DisplayToast(this, getResources().getString(R.string.jump_position_fail));
-            return;
-        }
-
-        // 不是经纬度就当成地址去检索
-        GoUtils.DisplayToast(this, getResources().getString(R.string.jump_position_searching));
-        mGeoCoder.search(text, pois -> {
-            if (pois == null || pois.isEmpty()) {
-                GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.app_search_null));
-                return;
-            }
-
-            OsmGeocoder.Poi poi = pois.get(0);
-            GeoPoint bd09 = wgs84ToBd09(poi.longitude, poi.latitude);
-            jumpToBd09(bd09.getLongitude(), bd09.getLatitude(), poi.name);
-
-            String name = TextUtils.isEmpty(poi.name) ? poi.address : poi.name;
-            GoUtils.DisplayToast(MainActivity.this,
-                    getResources().getString(R.string.jump_position_result) + name);
-        });
-    }
-
-    /** 把 BD-09 坐标选中并把地图视野移过去（只选点，不传送） */
-    private void jumpToBd09(double bd09Lng, double bd09Lat, String name) {
-        try {
-            if (mMapView == null) {
-                return;
-            }
-
-            mMarkName = TextUtils.isEmpty(name)
-                    ? getResources().getString(R.string.jump_position_default_name) : name;
-            mMarkLatLngMap = new GeoPoint(bd09Lat, bd09Lng);
-            markMap();
-            mMapView.getController().setZoom(18.0);
-            mMapView.getController().animateTo(bd09ToWgs84(bd09Lng, bd09Lat));
-        } catch (Exception e) {
-            XLog.e("ERROR: jumpToBd09");
-            GoUtils.DisplayToast(this, getResources().getString(R.string.jump_position_fail));
         }
     }
 
@@ -1239,7 +1144,9 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
         @Override
         public void onScriptFinish(com.zcshou.script.ScriptRoute route) {
-            mRunningScriptId = route == null ? null : route.id;
+            // 跑完 = 结束：本地也按“没在播”处理，路线条直接回到“开始移动”、
+            // 传送/点击移动不再被“播放中”拦截，模拟位置可以立刻继续
+            mRunningScriptId = null;
             runOnUiThread(() -> {
                 updateScriptButton();
                 GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.script_finished));
@@ -1257,6 +1164,8 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     private void updateScriptButton() {
         // 脚本启停可能伴随模拟位置服务重建，顺手确保定位图层还开着
         ensureMyLocationEnabled();
+        // 模拟位置（脚本）的启停决定左下角开关的显隐
+        refreshClickMoveSwitch();
 
         if (mButtonScript != null) {
             boolean running = mRunningScriptId != null;
@@ -1824,6 +1733,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             XLog.d("startForegroundService: ServiceGo");
 
             isMockServStart = true;
+            refreshClickMoveSwitch();
         } catch (Exception e) {
             XLog.e("ERROR: startGoLocation", e);
             GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_service));
@@ -1835,6 +1745,92 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         Intent serviceGoIntent = new Intent(MainActivity.this, ServiceGo.class);
         stopService(serviceGoIntent);
         isMockServStart = false;
+        refreshClickMoveSwitch();
+    }
+
+    /*============================== 点击移动 ⇄ 摇杆移动 开关 ==============================*/
+
+    /** 初始化左下角开关：默认状态由“移动类型”设置决定（选“点击移动”时默认开） */
+    private void initClickMoveSwitch() {
+        mClickMoveSwitch = findViewById(R.id.click_move_switch);
+        if (mClickMoveSwitch == null) {
+            return;
+        }
+
+        mClickMoveEnabled = "2".equals(sharedPreferences.getString("setting_joystick_type", "0"));
+        mClickMoveSwitch.setText(mClickMoveEnabled
+                ? R.string.move_mode_click : R.string.move_mode_joystick);
+        mClickMoveSwitch.setOnClickListener(v -> {
+            mClickMoveEnabled = !mClickMoveEnabled;
+            applyClickMoveMode();
+            if (mServiceBinder == null) {
+                // 状态要推给服务端；连接回来时 onServiceConnected 还会再补推一次，
+                // 否则切换只生效在本地，点地图会一直被服务端拒绝
+                bindServiceIfNeeded();
+            }
+        });
+
+        refreshClickMoveSwitch();
+    }
+
+    /** 把开关状态推给服务端（没连上时连接回调会再推一次）并刷新按钮文案 */
+    private void applyClickMoveMode() {
+        if (mClickMoveSwitch != null) {
+            mClickMoveSwitch.setText(mClickMoveEnabled
+                    ? R.string.move_mode_click : R.string.move_mode_joystick);
+        }
+
+        if (mServiceBinder != null) {
+            try {
+                mServiceBinder.setClickMoveMode(mClickMoveEnabled);
+            } catch (Exception e) {
+                XLog.e("ERROR: setClickMoveMode", e);
+            }
+        }
+    }
+
+    /** 开关只在模拟位置（单点 / 脚本）运行期间显示，结束后消失 */
+    private void refreshClickMoveSwitch() {
+        if (mClickMoveSwitch == null) {
+            return;
+        }
+
+        // 服务连着 = 还在注入位置（脚本跑完后位置冻结但服务仍在），点击移动仍可用
+        boolean running = isMockServStart || mRunningScriptId != null || mServiceBinder != null;
+        mClickMoveSwitch.setVisibility(running ? View.VISIBLE : View.GONE);
+    }
+
+    /**
+     * 主界面地图单击的“点击移动”处理。
+     *
+     * @return true 表示本次点击已按点击移动处理（不再走原来的选中标记逻辑）
+     */
+    private boolean handleClickMoveTap(GeoPoint p) {
+        if (mClickMoveSwitch == null || mClickMoveSwitch.getVisibility() != View.VISIBLE
+                || !mClickMoveEnabled) {
+            return false;
+        }
+
+        if (isScriptPlaying()) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.click_move_script_busy));
+            return true;
+        }
+
+        if (mServiceBinder == null) {
+            // 服务连接还没回来：补绑一次，连上后 onServiceConnected 会把开关状态推过去
+            bindServiceIfNeeded();
+            GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_service));
+            return true;
+        }
+
+        try {
+            if (!mServiceBinder.setClickTarget(p.getLongitude(), p.getLatitude())) {
+                GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_service));
+            }
+        } catch (Exception e) {
+            XLog.e("ERROR: setClickTarget", e);
+        }
+        return true;
     }
 
     private void doGoLocation(View v) {
@@ -1871,12 +1867,12 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         doGoLocationAction(v);
     }
 
-    /** 脚本是否正在播放（服务没绑定时用本地缓存兜底） */
+    /** 脚本是否正在播放（服务没绑定时以持久状态为准，跑完时服务端会把它清掉） */
     private boolean isScriptPlaying() {
         if (mServiceBinder != null) {
             return mServiceBinder.getScriptState() == ServiceGo.SCRIPT_STATE_PLAYING;
         }
-        return mRunningScriptId != null;
+        return new ScriptStore(this).getRunningScriptId() != null;
     }
 
     /** 真正执行“传送 / 终止模拟”（doGoLocation 前置检查与脚本确认之后的动作） */

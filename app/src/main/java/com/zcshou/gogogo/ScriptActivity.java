@@ -140,7 +140,8 @@ public class ScriptActivity extends BaseActivity {
 
         @Override
         public void onScriptFinish(ScriptRoute route) {
-            mPlayingScriptId = route == null ? null : route.id;
+            // 跑完即结束：别再让列表行显示“正在播放”
+            mPlayingScriptId = null;
             notifyAdapter();
         }
 

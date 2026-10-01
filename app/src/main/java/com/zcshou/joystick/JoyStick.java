@@ -79,6 +79,11 @@ public class JoyStick extends View {
     private double mR = 0;
     private double disLng = 0;
     private double disLat = 0;
+    /** 方向输入控件（圆形摇杆 / 方向按键），点击移动开启时收起 */
+    private RockerView mRockerView;
+    private ButtonView mButtonView;
+    /** 点击移动是否生效（与摇杆方向输入为切换关系） */
+    private boolean mClickMoveEnabled;
     private final SharedPreferences sharedPreferences;
     /* 历史记录悬浮窗相关 */
     private FrameLayout mHistoryLayout;
@@ -358,24 +363,63 @@ public class JoyStick extends View {
             }
         });
         /* 方向键点击处理 */
-        RockerView rckView = mJoystickLayout.findViewById(R.id.joystick_rocker);
-        rckView.setListener(this::processDirection);
+        mRockerView = mJoystickLayout.findViewById(R.id.joystick_rocker);
+        mRockerView.setListener(this::processDirection);
 
         /* 方向键点击处理 */
-        ButtonView btnView = mJoystickLayout.findViewById(R.id.joystick_button);
-        btnView.setListener(this::processDirection);
+        mButtonView = mJoystickLayout.findViewById(R.id.joystick_button);
+        mButtonView.setListener(this::processDirection);
 
-        /* 这里用来决定摇杆类型 */
-        if (sharedPreferences.getString("setting_joystick_type", "0").equals("0")) {
-            rckView.setVisibility(VISIBLE);
-            btnView.setVisibility(GONE);
+        /* 这里用来决定移动类型（“移动类型”设置：0/2 圆形摇杆，1 方向按键；2=点击移动时先显示摇杆，
+           服务连上后 setClickMoveEnabled 会按开关状态收起方向输入） */
+        if (sharedPreferences.getString("setting_joystick_type", "0").equals("1")) {
+            mRockerView.setVisibility(GONE);
+            mButtonView.setVisibility(VISIBLE);
         } else {
-            rckView.setVisibility(GONE);
-            btnView.setVisibility(VISIBLE);
+            mRockerView.setVisibility(VISIBLE);
+            mButtonView.setVisibility(GONE);
+        }
+    }
+
+    /** 摇杆当前选择的行走速度（走 / 跑 / 骑按钮的结果），点击移动按它走 */
+    public double getCurrentSpeed() {
+        return mSpeed;
+    }
+
+    /**
+     * 点击移动开关：开启时收起方向摇杆（点击与摇杆是切换关系），
+     * 行走方式按钮保留——点击移动的行走速度取的正是这里的选择。
+     */
+    public void setClickMoveEnabled(boolean enabled) {
+        mClickMoveEnabled = enabled;
+
+        // 无论开关方向都先把移动计时器停掉：控件可能在按住途中被收起，
+        // 收不到“抬起”事件，留着计时器会变成无人触碰也在移动的幽灵位移
+        if (mTimer != null) {
+            mTimer.cancel();
+        }
+        isMove = false;
+
+        boolean useRocker = !"1".equals(sharedPreferences.getString("setting_joystick_type", "0"));
+
+        if (mRockerView != null) {
+            mRockerView.setVisibility(enabled ? GONE : (useRocker ? VISIBLE : GONE));
+        }
+        if (mButtonView != null) {
+            mButtonView.setVisibility(enabled ? GONE : (useRocker ? GONE : VISIBLE));
         }
     }
 
     private void processDirection(boolean auto, double angle, double r) {
+        // 点击移动开启时方向输入整体无效（两者为切换关系）。
+        // 顺带取消移动计时器：否则“手指还按着时切换模式导致控件收起、收不到抬起事件”，
+        // 计时器会一直空转，等切回摇杆就会在无人触碰时自己动（幽灵位移）
+        if (mClickMoveEnabled) {
+            mTimer.cancel();
+            isMove = false;
+            return;
+        }
+
         if (r <= 0) {
             mTimer.cancel();
             isMove = false;

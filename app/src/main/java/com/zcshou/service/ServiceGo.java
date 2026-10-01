@@ -21,6 +21,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.Message;
 import android.os.Process;
 import android.os.SystemClock;
@@ -82,6 +83,18 @@ public class ServiceGo extends Service {
     private ScriptRoute mScriptRoute;
     private ScriptStore mScriptStore;
     private ScriptListener mScriptListener;
+
+    /* 点击移动：主界面左下角开关控制，点地图朝目标点按“行走方式”持续走 */
+    /** true = 点击移动生效（false = 摇杆移动）；开启时摇杆方向输入暂停 */
+    private volatile boolean mClickMoveEnabled;
+    /** 有一个未到达的行走目标 */
+    private volatile boolean mHasClickTarget;
+    private volatile double mClickTargetLng;
+    private volatile double mClickTargetLat;
+    /** 上一次朝目标推进的时刻（毫秒），按真实间隔步进 */
+    private long mLastClickStepMs;
+    /** 到达目标的提示要发到主线程 */
+    private final Handler mMainHandler = new Handler(Looper.getMainLooper());
 
     /** 脚本播放状态回调，供界面展示“第几个点 / 当前状态” */
     public interface ScriptListener {
@@ -296,9 +309,9 @@ public class ServiceGo extends Service {
             mJoyStick.setListener(new JoyStick.JoyStickClickListener() {
                 @Override
                 public void onMoveInfo(double speed, double disLng, double disLat, double angle) {
-                    // 脚本正在接管位置：摇杆位移直接忽略，位置由脚本说了算。
-                    // 否则手动位移写进去不到 100ms 就被脚本下一帧覆盖，两边打架
-                    if (isScriptDrivingPosition()) {
+                    // 位置的两种接管者：脚本播放（否则位移不到 100ms 就被覆盖）、
+                    // 或点击移动开启中（点击与摇杆是切换关系，此时摇杆方向输入暂停）
+                    if (isScriptDrivingPosition() || mClickMoveEnabled) {
                         return;
                     }
 
@@ -329,6 +342,8 @@ public class ServiceGo extends Service {
                     // 否则“跑完脚本（speed=0）再手动选点”会一直注入 speed=0，上层应用会判定为没在移动
                     mSpeed = 1.2;
                     mCurBea = DEFAULT_BEA;
+                    // 传送到了新位置，进行中的点击移动目标作废
+                    mHasClickTarget = false;
                     saveLastPosition();
                 }
             });
@@ -363,6 +378,8 @@ public class ServiceGo extends Service {
                     Thread.sleep(100);
 
                     if (!isStop) {
+                        // 点击移动先按“行走方式”的速度朝目标走一步，再统一注入本轮位置
+                        advanceClickTarget();
                         setLocationNetwork();
                         setLocationGPS();
 
@@ -417,6 +434,95 @@ public class ServiceGo extends Service {
         return bearing == 0.0f ? 0.01f : bearing;
     }
 
+    /*============================== 点击移动 ==============================*/
+
+    /** 切换“点击移动 ⇄ 摇杆移动”（主界面左下角开关）；切换即作废进行中的行走目标 */
+    private void setClickMoveMode(boolean enabled) {
+        mClickMoveEnabled = enabled;
+        mHasClickTarget = false;
+
+        if (mJoyStick != null) {
+            try {
+                // 收起 / 恢复方向摇杆（点击与摇杆为切换关系，行走方式按钮保留）
+                mJoyStick.setClickMoveEnabled(enabled);
+            } catch (Exception e) {
+                XLog.e("SERVICEGO: ERROR - setClickMoveEnabled", e);
+            }
+        }
+    }
+
+    /**
+     * 点击移动：朝目标点按摇杆当前选择的行走方式（走 / 跑 / 骑的速度）持续前进。
+     *
+     * <p>脚本播放时位置由脚本接管，这里让路；到达目标后停止并提示一次。</p>
+     */
+    private void advanceClickTarget() {
+        if (!mClickMoveEnabled || !mHasClickTarget) {
+            return;
+        }
+        if (mScriptState == SCRIPT_STATE_PLAYING && mScriptPlayer != null && mScriptPlayer.isPlaying()) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        long last = mLastClickStepMs;
+        mLastClickStepMs = now;
+        double dt = Math.min(1.0D, Math.max(0.0D, (now - last) / 1000.0D));
+        if (dt <= 0) {
+            return;
+        }
+
+        double speed = mJoyStick != null ? mJoyStick.getCurrentSpeed() : 1.2D;
+        if (speed <= 0) {
+            speed = 1.2D;
+        }
+        double step = speed * dt;
+
+        double distance = ScriptPlayer.distanceMeters(mCurLng, mCurLat, mClickTargetLng, mClickTargetLat);
+        float bearing = bearingBetween(mCurLng, mCurLat, mClickTargetLng, mClickTargetLat);
+        mCurBea = bearing;
+        mSpeed = speed;
+
+        if (distance <= Math.max(step, 0.05D)) {
+            // 到达：落点精确对齐目标
+            mCurLng = mClickTargetLng;
+            mCurLat = mClickTargetLat;
+            mHasClickTarget = false;
+            notifyClickArrived();
+        } else {
+            // 一步的位移很小，平面近似的误差可以忽略
+            double ratio = step / distance;
+            mCurLng += (mClickTargetLng - mCurLng) * ratio;
+            mCurLat += (mClickTargetLat - mCurLat) * ratio;
+        }
+
+        if (mJoyStick != null) {
+            try {
+                mJoyStick.setCurrentPosition(mCurLng, mCurLat, mCurAlt);
+            } catch (Exception e) {
+                XLog.e("SERVICEGO: ERROR - click setCurrentPosition", e);
+            }
+        }
+    }
+
+    /** 两点间方位角（0~360，正北为 0；避开 0 以免注入端被判定“没有朝向”） */
+    private static float bearingBetween(double lng1, double lat1, double lng2, double lat2) {
+        double lat1r = Math.toRadians(lat1);
+        double lat2r = Math.toRadians(lat2);
+        double dLng = Math.toRadians(lng2 - lng1);
+
+        double y = Math.sin(dLng) * Math.cos(lat2r);
+        double x = Math.cos(lat1r) * Math.sin(lat2r) - Math.sin(lat1r) * Math.cos(lat2r) * Math.cos(dLng);
+        float bearing = (float) ((Math.toDegrees(Math.atan2(y, x)) + 360.0D) % 360.0D);
+        return bearing == 0.0f ? 0.01f : bearing;
+    }
+
+    /** 到达提示（Toast 必须在有 Looper 的线程，这里发到主线程） */
+    private void notifyClickArrived() {
+        mMainHandler.post(() -> GoUtils.DisplayToast(ServiceGo.this,
+                getString(R.string.click_move_arrived)));
+    }
+
     /*============================== 脚本模式 ==============================*/
 
     /** 创建一个绑定到本服务的脚本播放器（只创建一次） */
@@ -459,6 +565,19 @@ public class ServiceGo extends Service {
             public synchronized void onScriptFinish(ScriptRoute route) {
                 mScriptState = SCRIPT_STATE_FINISHED;
                 XLog.i("SERVICEGO: script finished - " + route.name);
+                // 跑完 = 本次脚本到此结束：立刻清掉“正在播放”的持久状态与重启恢复标记。
+                // 否则界面会一直按“播放中”处理——路线条显示“停止”、要先停一次才能再模拟、
+                // 点击移动被拒、单点传送被要求确认，表现为“脚本结束后模拟位置不能立刻实现”
+                try {
+                    if (mScriptStore != null) {
+                        mScriptStore.setRunningScriptId(null);
+                    }
+                    PreferenceManager.getDefaultSharedPreferences(this).edit()
+                            .remove(KEY_LAST_SCRIPT_ID)
+                            .apply();
+                } catch (Exception e) {
+                    XLog.e("SERVICEGO: ERROR - clear script state on finish");
+                }
                 if (mScriptListener != null) {
                     mScriptListener.onScriptFinish(route);
                 }
@@ -553,6 +672,8 @@ public class ServiceGo extends Service {
         mScriptRoute = route;
         mScriptState = SCRIPT_STATE_PLAYING;
         mScriptStore.setRunningScriptId(route.id);
+        // 脚本开始接管位置：作废进行中的点击移动目标
+        mHasClickTarget = false;
 
         PreferenceManager.getDefaultSharedPreferences(this).edit()
                 .putString(KEY_LAST_SCRIPT_ID, route.id)
@@ -759,10 +880,11 @@ public class ServiceGo extends Service {
                 return;
             }
 
-            // 手动传送会打断脚本播放
+            // 手动传送会打断脚本播放，也会作废进行中的点击移动目标
             if (mScriptPlayer != null && mScriptPlayer.isPlaying()) {
                 stopScript();
             }
+            mHasClickTarget = false;
 
             mLocHandler.removeMessages(HANDLER_MSG_ID);
             mCurLng = lng;
@@ -791,6 +913,35 @@ public class ServiceGo extends Service {
         /** 停止脚本播放 */
         public void stopScript() {
             ServiceGo.this.stopScript();
+        }
+
+        /** 切换“点击移动 ⇄ 摇杆移动”（主界面左下角开关） */
+        public void setClickMoveMode(boolean enabled) {
+            ServiceGo.this.setClickMoveMode(enabled);
+        }
+
+        /**
+         * 点击移动：朝目标点按摇杆当前选择的行走方式持续前进。
+         *
+         * @param lng 目标经度（WGS-84）
+         * @param lat 目标纬度（WGS-84）
+         * @return 未开启点击移动或脚本正在播放时返回 false
+         */
+        public boolean setClickTarget(double lng, double lat) {
+            if (!mClickMoveEnabled || mScriptState == SCRIPT_STATE_PLAYING) {
+                return false;
+            }
+
+            mClickTargetLng = lng;
+            mClickTargetLat = lat;
+            mLastClickStepMs = System.currentTimeMillis();
+            mHasClickTarget = true;
+            return true;
+        }
+
+        /** 作废进行中的行走目标 */
+        public void cancelClickTarget() {
+            mHasClickTarget = false;
         }
 
         /**
@@ -823,9 +974,12 @@ public class ServiceGo extends Service {
             return mScriptState;
         }
 
-        /** 当前播放的脚本 id，未播放时返回 null */
+        /** 当前正在播放的脚本 id；没在播放（含已跑完）时返回 null */
         public String getRunningScriptId() {
-            return mScriptRoute == null ? null : mScriptRoute.id;
+            if (mScriptState != SCRIPT_STATE_PLAYING || mScriptRoute == null) {
+                return null;
+            }
+            return mScriptRoute.id;
         }
 
         public String getRunningScriptName() {

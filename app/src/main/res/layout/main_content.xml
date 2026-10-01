@@ -66,6 +66,23 @@
             app:pressedTranslationZ="12dp"
             app:srcCompat="@drawable/ic_route" />
 
+        <!--
+            移动方式开关：点击移动 ⇄ 摇杆移动。
+            模拟位置（单点或脚本）启动后出现在左下角，结束后消失；
+            文案显示当前生效的方式，点击即互切。
+        -->
+        <Button
+            android:id="@+id/click_move_switch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_marginStart="16dp"
+            android:layout_marginBottom="10dp"
+            android:minWidth="0dp"
+            android:text="@string/move_mode_joystick"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
         <LinearLayout
             android:id="@+id/search_linear"
             android:layout_width="match_parent"

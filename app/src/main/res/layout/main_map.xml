@@ -101,19 +101,7 @@
             app:srcCompat="@drawable/ic_input"
             app:tint="@color/colorAccent" />
 
-        <ImageButton
-            android:id="@+id/jump_pos"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_alignParentEnd="true"
-            android:layout_marginTop="273dp"
-            android:layout_marginEnd="10dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/jump_button"
-            android:theme="@style/RippleWhite"
-            app:srcCompat="@drawable/ic_search"
-            app:tint="@color/colorAccent" />
-
+        <!-- 跳转经纬度原有第二个入口（jump_pos，273dp）已移除：只保留上面的输入位置入口 -->
 
         <TextView
             android:layout_width="match_parent"

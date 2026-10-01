@@ -2,10 +2,12 @@
     <string-array name="array_joystick_type">
         <item>圆形</item>
         <item>按键</item>
+        <item>点击移动</item>
     </string-array>
     <string-array name="array_joystick_type_values">
         <item>0</item>
         <item>1</item>
+        <item>2</item>
     </string-array>
     <string-array name="array_map_type">
         <item>百度地图</item>
