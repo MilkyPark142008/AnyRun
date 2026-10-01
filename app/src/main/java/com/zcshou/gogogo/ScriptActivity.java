@@ -11,9 +11,12 @@ import android.view.LayoutInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.ImageButton;
 import android.widget.ListView;
+import android.widget.Spinner;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -54,6 +57,11 @@ public class ScriptActivity extends BaseActivity {
     private boolean mBound;
     private String mPlayingScriptId;
     private int mPlayingIndex;
+    /** 播放中切换走 / 跑 / 骑的下拉（只在有脚本播放时显示） */
+    private Spinner mLiveModeSpinner;
+    private View mLiveModeBar;
+    /** 当前生效的移动状态（服务回调 / 绑定时同步过来，用于忽略 setSelection 的回声） */
+    private ScriptWaypoint.Mode mEffectiveMode = ScriptWaypoint.Mode.WALK;
 
     private final ServiceConnection mConnection = new ServiceConnection() {
         @Override
@@ -63,6 +71,13 @@ public class ScriptActivity extends BaseActivity {
             mServiceBinder.setScriptListener(mScriptListener);
 
             mPlayingScriptId = mServiceBinder.getRunningScriptId();
+            ScriptWaypoint.Mode mode = mServiceBinder.getLiveMode();
+            if (mode == null) {
+                mode = mServiceBinder.getCurrentMode();
+            }
+            if (mode != null) {
+                mEffectiveMode = mode;
+            }
             notifyAdapter();
         }
 
@@ -70,6 +85,7 @@ public class ScriptActivity extends BaseActivity {
         public void onServiceDisconnected(ComponentName name) {
             mServiceBinder = null;
             mBound = false;
+            notifyAdapter();
         }
     };
 
@@ -79,6 +95,9 @@ public class ScriptActivity extends BaseActivity {
         public void onScriptSegment(ScriptRoute route, int index, ScriptWaypoint.Mode mode, double speed) {
             mPlayingIndex = index;
             mPlayingScriptId = route == null ? null : route.id;
+            if (mode != null) {
+                mEffectiveMode = mode;
+            }
             notifyAdapter();
         }
 
@@ -126,7 +145,75 @@ public class ScriptActivity extends BaseActivity {
         FloatingActionButton addButton = findViewById(R.id.script_add);
         addButton.setOnClickListener(v -> openEditor(null));
 
+        initLiveModeBar();
+
         refreshList();
+    }
+
+    /** 播放中切换走 / 跑 / 骑的操作条（没有脚本在跑时隐藏） */
+    private void initLiveModeBar() {
+        mLiveModeBar = findViewById(R.id.script_mode_bar);
+        mLiveModeSpinner = findViewById(R.id.script_live_mode);
+        if (mLiveModeSpinner == null) {
+            return;
+        }
+
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
+                new String[] {
+                        getResources().getString(R.string.script_mode_walk),
+                        getResources().getString(R.string.script_mode_run),
+                        getResources().getString(R.string.script_mode_bike)});
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        mLiveModeSpinner.setAdapter(adapter);
+
+        mLiveModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                ScriptWaypoint.Mode mode = modeAt(position);
+                // setAdapter / setSelection 触发的回调与当前状态一致，直接忽略
+                if (mode == mEffectiveMode || mPlayingScriptId == null) {
+                    return;
+                }
+
+                boolean ok = mServiceBinder != null && mServiceBinder.switchLiveMode(mode);
+                if (ok) {
+                    mEffectiveMode = mode;
+                    notifyAdapter();
+                }
+                GoUtils.DisplayToast(ScriptActivity.this, getResources().getString(
+                        ok ? R.string.mode_switched : R.string.mode_switch_fail, mode.label));
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+    }
+
+    private static ScriptWaypoint.Mode modeAt(int position) {
+        if (position == 1) {
+            return ScriptWaypoint.Mode.RUN;
+        }
+        if (position == 2) {
+            return ScriptWaypoint.Mode.BIKE;
+        }
+        return ScriptWaypoint.Mode.WALK;
+    }
+
+    /** 刷新切换条的可见性与选中项（跟随当前播放状态） */
+    private void refreshModeBar() {
+        if (mLiveModeBar == null || mLiveModeSpinner == null) {
+            return;
+        }
+
+        boolean playing = mPlayingScriptId != null;
+        mLiveModeBar.setVisibility(playing ? View.VISIBLE : View.GONE);
+        if (playing) {
+            int position = mEffectiveMode.ordinal();
+            if (mLiveModeSpinner.getSelectedItemPosition() != position) {
+                mLiveModeSpinner.setSelection(position);
+            }
+        }
     }
 
     @Override
@@ -234,6 +321,7 @@ public class ScriptActivity extends BaseActivity {
             boolean empty = mRoutes.isEmpty();
             mNoScriptText.setVisibility(empty ? View.VISIBLE : View.GONE);
             mListView.setVisibility(empty ? View.GONE : View.VISIBLE);
+            refreshModeBar();
             mAdapter.notifyDataSetChanged();
         });
     }
@@ -399,7 +487,9 @@ public class ScriptActivity extends BaseActivity {
             if (playing) {
                 status.setVisibility(View.VISIBLE);
                 int index = Math.min(mPlayingIndex + 1, Math.max(1, route.size()));
-                status.setText(getResources().getString(R.string.script_playing, index, route.size(), modeLabel(mode)));
+                // 展示服务端真正生效的状态（播放中手动切换过的也反映出来）
+                status.setText(getResources().getString(R.string.script_playing, index, route.size(),
+                        modeLabel(mEffectiveMode != null ? mEffectiveMode : mode)));
             } else {
                 status.setVisibility(View.GONE);
                 status.setText("");

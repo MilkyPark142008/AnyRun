@@ -724,6 +724,32 @@ public class ServiceGo extends Service {
             ServiceGo.this.stopScript();
         }
 
+        /**
+         * 播放过程中切换移动状态（走 / 跑 / 骑），立即对剩余路段生效。
+         *
+         * @param mode 新的移动状态
+         * @return 是否切换成功（没在播放脚本时返回 false）
+         */
+        public boolean switchLiveMode(ScriptWaypoint.Mode mode) {
+            if (mScriptPlayer == null || !mScriptPlayer.isPlaying() || mode == null) {
+                return false;
+            }
+
+            double[] speeds = getModeSpeeds();
+            double speed = speeds[Math.max(0, Math.min(speeds.length - 1, mode.ordinal()))];
+            return mScriptPlayer.setLiveMode(mode, speed);
+        }
+
+        /** 当前播放中手动切换过的状态，没有切换过或没在播放时返回 null */
+        public ScriptWaypoint.Mode getLiveMode() {
+            return mScriptPlayer == null ? null : mScriptPlayer.getLiveMode();
+        }
+
+        /** 当前正在生效的移动状态（手动切换过返回切换值，否则是脚本当前段的状态） */
+        public ScriptWaypoint.Mode getCurrentMode() {
+            return mScriptPlayer == null ? null : mScriptPlayer.getMode();
+        }
+
         public int getScriptState() {
             return mScriptState;
         }

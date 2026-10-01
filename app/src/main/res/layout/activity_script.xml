@@ -33,6 +33,33 @@
             android:text="@string/script_tips"
             android:textSize="12sp" />
 
+        <!-- 播放中切换走 / 跑 / 骑，没在播放时隐藏 -->
+        <LinearLayout
+            android:id="@+id/script_mode_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#e6ffffff"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="10dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="4dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/script_mode_live_hint"
+                android:textSize="13sp" />
+
+            <Spinner
+                android:id="@+id/script_live_mode"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1" />
+        </LinearLayout>
+
         <TextView
             android:id="@+id/script_no_textview"
             android:layout_width="match_parent"

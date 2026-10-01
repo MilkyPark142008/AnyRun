@@ -30,10 +30,13 @@ public class ScriptPlayer {
     /** 开始播放的时刻（毫秒，用来把等待时间和移动时间统一成一条时间轴） */
     private long mStartRealtime;
     /**
-     * 当前路段在开始播放之前已经走过的“移动时间”（秒）。
-     * 只有“从当前位置中途接入脚本”时不为 0，用来避免位置瞬移。
+     * 已经“消费掉”的时间轴长度（秒）：走过路段、到站停留都计入。
+     *
+     * <p>每个 tick 的有效时间 = (now - mStartRealtime) / 1000 - mConsumedSeconds，
+     * 也就是“从当前路段起点算起经过的秒数”。以前没有这个扣减，全局累计时间会被
+     * 从当前段重新扣一遍，导致段落被成片跳过、脚本提前跑完。</p>
      */
-    private double mSegmentOffset;
+    private double mConsumedSeconds;
     /** 当前正在走的路段：从 mIndex 到 mIndex + 1 */
     private int mIndex;
     /** 是否循环 */
@@ -42,6 +45,23 @@ public class ScriptPlayer {
     private int mLap;
     /** 是否已经产生过有效位置（用于首次强制回调一次） */
     private boolean mHasPosition;
+
+    /**
+     * 播放过程中手动切换的移动状态（走 / 跑 / 骑）。
+     *
+     * <p>非 null 时它会覆盖后面路点自带的状态与速度，直到再次切换或脚本结束，
+     * 这样“边走边切”不需要停下来重新开始。</p>
+     */
+    private ScriptWaypoint.Mode mOverrideMode;
+    /** 与 {@link #mOverrideMode} 配套的速度（米/秒），<= 0 表示没有手动切换 */
+    private double mOverrideSpeed;
+    /**
+     * 上一次 {@link #onTick()} 结束时，当前路段上已经消耗的时间（秒）。
+     *
+     * <p>切换速度时用它换算出“已经走过的距离”，再按新速度重算时间轴，
+     * 位置就不会跳变。</p>
+     */
+    private double mElapsedInSegment;
 
     private double mLng;
     private double mLat;
@@ -124,13 +144,16 @@ public class ScriptPlayer {
         mLap = 0;
         mEndReached = false;
         mHasPosition = false;
+        mOverrideMode = null;
+        mOverrideSpeed = 0;
+        mElapsedInSegment = 0;
+        mConsumedSeconds = 0;
 
         List<ScriptWaypoint> points = route.points;
 
         // 只有一个点：原地保持该状态（不会移动，但速度 / 方向按该点设置）
         if (points.size() == 1) {
             mIndex = 0;
-            mSegmentOffset = 0;
             mLng = points.get(0).lng;
             mLat = points.get(0).lat;
             mAltitude = points.get(0).alt;
@@ -150,7 +173,6 @@ public class ScriptPlayer {
         Anchor anchor = findAnchor(points, fromLng, fromLat);
 
         mIndex = anchor.index;
-        mSegmentOffset = anchor.offsetSeconds;
 
         ScriptWaypoint current = points.get(mIndex);
         mLng = current.lng;
@@ -160,7 +182,8 @@ public class ScriptPlayer {
         mSpeed = current.speed;
         mBearing = ScriptParser.bearing(current, points.get(mIndex + 1));
 
-        mStartRealtime = System.currentTimeMillis();
+        // 接入点之前已经走过的路程折进时间轴：t=0 时位置正好落在接入点上，不会瞬移
+        mStartRealtime = System.currentTimeMillis() - (long) Math.round(anchor.offsetSeconds * 1000.0);
         mPlaying = true;
 
         if (mHandler != null) {
@@ -177,6 +200,59 @@ public class ScriptPlayer {
         mPlaying = false;
         mEndReached = false;
         mRoute = null;
+        mOverrideMode = null;
+        mOverrideSpeed = 0;
+        mElapsedInSegment = 0;
+        mConsumedSeconds = 0;
+    }
+
+    /**
+     * 播放过程中手动切换移动状态（走 / 跑 / 骑）。
+     *
+     * <p>切换时先按当前已走过的距离重新对齐时间轴，再让剩下的路以新速度走完，
+     * 因此位置不会跳变。切换会一直生效到再次切换或脚本结束。</p>
+     *
+     * @param mode  新的移动状态
+     * @param speed 新状态对应的速度（米/秒），必须大于 0
+     * @return 是否切换成功（没有在播放、参数非法时返回 false）
+     */
+    public synchronized boolean setLiveMode(ScriptWaypoint.Mode mode, double speed) {
+        if (!mPlaying || mRoute == null || mEndReached || mode == null || speed <= 0) {
+            return false;
+        }
+
+        List<ScriptWaypoint> points = mRoute.points;
+        if (points == null || points.isEmpty()) {
+            return false;
+        }
+
+        // 单点脚本：没有路段可走，只把状态和速度换掉
+        if (points.size() < 2) {
+            mOverrideMode = mode;
+            mOverrideSpeed = speed;
+            return true;
+        }
+
+        // 必须在改 mOverrideSpeed 之前算，此时用的还是“切换前”的速度模型
+        double covered = coveredDistanceInSegment();
+        double segment = segmentLength();
+
+        mOverrideMode = mode;
+        mOverrideSpeed = speed;
+
+        // 新模型下 v0 = v1 = 新速度，所以“已走 covered 米”等价于新时间轴上的 covered / speed 秒。
+        // 时间轴 = 原始时钟 - 已消费时间，所以要把 mConsumedSeconds 一起加回去
+        double elapsed = Math.min(segment, Math.max(0, covered)) / speed;
+        mStartRealtime = System.currentTimeMillis()
+                - (long) Math.round((elapsed + mConsumedSeconds) * 1000.0);
+        mElapsedInSegment = elapsed;
+
+        return true;
+    }
+
+    /** 当前播放中手动切换的状态，没有切换过时返回 null */
+    public synchronized ScriptWaypoint.Mode getLiveMode() {
+        return mOverrideMode;
     }
 
     /**
@@ -198,10 +274,12 @@ public class ScriptPlayer {
         // 单点脚本：位置不动，只有速度 / 方向需要维持
         if (points.size() == 1) {
             ScriptWaypoint only = points.get(0);
-            return updatePosition(only.lng, only.lat, only.alt, only.mode, only.speed, mBearing, false);
+            return updatePosition(only.lng, only.lat, only.alt, liveMode(only),
+                    liveSpeed(only), mBearing, false);
         }
 
-        double elapsed = (System.currentTimeMillis() - mStartRealtime) / 1000.0;
+        // 有效时间 = 从接入点开始的全局时钟 - 已消费的时间，得到“当前路段上已过的秒数”
+        double elapsed = (System.currentTimeMillis() - mStartRealtime) / 1000.0 - mConsumedSeconds;
         if (elapsed < 0) {
             elapsed = 0;
         }
@@ -209,11 +287,9 @@ public class ScriptPlayer {
         double remainingTime = elapsed;
         int guard = 0;
 
-        // 每轮循环里的 remainingTime 都表示“从当前路段起点算起经过的秒数”：
-        // 第一轮要把接入脚本时已经走过的偏移扣掉，之后每跨过一段都会重置为剩余的净时间。
+        // 每轮循环里的 remainingTime 都表示“从当前路段起点算起经过的秒数”，
+        // 每跨过一段就把该段消耗的时间记入 mConsumedSeconds，保证跨 tick 时仍然成立。
         while (guard++ < 100000) {
-            remainingTime -= mSegmentOffset;
-            mSegmentOffset = 0;
             if (remainingTime < 0) {
                 remainingTime = 0;
             }
@@ -225,8 +301,9 @@ public class ScriptPlayer {
                 if (!mLoop) {
                     ScriptWaypoint last = points.get(points.size() - 1);
                     mEndReached = true;
+                    mElapsedInSegment = remainingTime;
                     // 终点的停留已经在最后一段的预算里消耗完，这里只报“已停下”
-                    updatePosition(last.lng, last.lat, last.alt, last.mode, 0, mBearing, true);
+                    updatePosition(last.lng, last.lat, last.alt, liveMode(last), 0, mBearing, true);
 
                     if (mHandler != null) {
                         mHandler.onScriptFinish(mRoute);
@@ -238,15 +315,16 @@ public class ScriptPlayer {
                 ScriptWaypoint last = points.get(mIndex);
                 ScriptWaypoint first = points.get(0);
                 double closing = ScriptParser.distance(last, first);
-                double closingV0 = speedOf(last);
-                double closingV1 = speedOf(first);
+                double closingV0 = liveSpeed(last);
+                double closingV1 = liveSpeed(first);
 
                 if (closing < MIN_STEP_METERS) {
                     mLap++;
                     mIndex = 0;
+                    mElapsedInSegment = remainingTime;
                     mBearing = points.size() > 1 ? ScriptParser.bearing(first, points.get(1)) : 0;
                     if (mHandler != null) {
-                        mHandler.onScriptSegment(mRoute, 0, first.mode, closingV1);
+                        mHandler.onScriptSegment(mRoute, 0, liveMode(first), closingV1);
                     }
                     continue;
                 }
@@ -261,15 +339,18 @@ public class ScriptPlayer {
                     double speed = remainingTime < closingTravel ? speedAt(closingV0, closingV1, moving, closingTravel) : 0;
                     double bearing = ScriptParser.bearing(last, first);
                     double[] position = destination(last.lat, last.lng, bearing, distance);
-                    return updatePosition(position[0], position[1], last.alt, last.mode, speed, bearing, true);
+                    mElapsedInSegment = remainingTime;
+                    return updatePosition(position[0], position[1], last.alt, liveMode(last), speed, bearing, true);
                 }
 
                 remainingTime -= closingTravel + closingWait;
+                mConsumedSeconds += closingTravel + closingWait;
                 mLap++;
                 mIndex = 0;
+                mElapsedInSegment = remainingTime;
                 mBearing = points.size() > 1 ? ScriptParser.bearing(first, points.get(1)) : 0;
                 if (mHandler != null) {
-                    mHandler.onScriptSegment(mRoute, 0, first.mode, closingV1);
+                    mHandler.onScriptSegment(mRoute, 0, liveMode(first), closingV1);
                 }
                 continue;
             }
@@ -281,18 +362,19 @@ public class ScriptPlayer {
             // 位置重合的相邻点：直接跨过去
             if (segment < MIN_STEP_METERS) {
                 mIndex = next;
+                mElapsedInSegment = remainingTime;
                 mBearing = next + 1 < points.size()
                         ? ScriptParser.bearing(to, points.get(next + 1))
                         : ScriptParser.bearing(to, mLoop ? points.get(0) : to);
                 if (mHandler != null) {
-                    mHandler.onScriptSegment(mRoute, mIndex, to.mode, speedOf(to));
+                    mHandler.onScriptSegment(mRoute, mIndex, liveMode(to), liveSpeed(to));
                 }
                 continue;
             }
 
             // 段内速度从起点的状态速度线性过渡到终点的状态速度（走 / 跑 / 骑之间不再瞬变）
-            double v0 = speedOf(from);
-            double v1 = speedOf(to);
+            double v0 = liveSpeed(from);
+            double v1 = liveSpeed(to);
             double travel = travelTime(segment, v0, v1);
             double dwell = waitOf(to);
 
@@ -304,18 +386,21 @@ public class ScriptPlayer {
                 double speed = moving ? speedAt(v0, v1, movingSeconds, travel) : 0;
                 double bearing = ScriptParser.bearing(from, to);
                 double[] position = destination(from.lat, from.lng, bearing, distance);
-                return updatePosition(position[0], position[1], from.alt, from.mode, speed, bearing, true);
+                mElapsedInSegment = remainingTime;
+                return updatePosition(position[0], position[1], from.alt, liveMode(from), speed, bearing, true);
             }
 
             // 这一段（含到站停留）已经走完，进入下一站
             remainingTime -= travel + dwell;
+            mConsumedSeconds += travel + dwell;
             mIndex = next;
+            mElapsedInSegment = remainingTime;
             mBearing = next + 1 < points.size()
                     ? ScriptParser.bearing(to, points.get(next + 1))
                     : ScriptParser.bearing(to, mLoop ? points.get(0) : to);
 
             if (mHandler != null) {
-                mHandler.onScriptSegment(mRoute, mIndex, to.mode, speedOf(to));
+                mHandler.onScriptSegment(mRoute, mIndex, liveMode(to), liveSpeed(to));
             }
         }
 
@@ -360,6 +445,51 @@ public class ScriptPlayer {
         if (mHandler != null) {
             mHandler.onScriptError(message);
         }
+    }
+
+    /** 播放中手动切换过状态时，用切换后的速度；否则用路点自己的速度 */
+    private double liveSpeed(ScriptWaypoint point) {
+        return mOverrideSpeed > 0 ? mOverrideSpeed : speedOf(point);
+    }
+
+    /** 播放中手动切换过状态时，回调里报切换后的状态 */
+    private ScriptWaypoint.Mode liveMode(ScriptWaypoint point) {
+        if (mOverrideMode != null) {
+            return mOverrideMode;
+        }
+        return point == null || point.mode == null ? ScriptWaypoint.Mode.WALK : point.mode;
+    }
+
+    /** 当前路段的长度（米）；循环模式下的闭合段也算在内 */
+    private double segmentLength() {
+        List<ScriptWaypoint> points = mRoute == null ? null : mRoute.points;
+        if (points == null || points.size() < 2) {
+            return 0;
+        }
+
+        if (mIndex + 1 < points.size()) {
+            return ScriptParser.distance(points.get(mIndex), points.get(mIndex + 1));
+        }
+        return ScriptParser.distance(points.get(mIndex), points.get(0));
+    }
+
+    /** 按上一次 tick 留下的时间推算当前路段上已经走过的距离（米） */
+    private double coveredDistanceInSegment() {
+        List<ScriptWaypoint> points = mRoute == null ? null : mRoute.points;
+        if (points == null || points.size() < 2) {
+            return 0;
+        }
+
+        ScriptWaypoint from = points.get(mIndex);
+        ScriptWaypoint to = mIndex + 1 < points.size() ? points.get(mIndex + 1) : points.get(0);
+
+        double segment = ScriptParser.distance(from, to);
+        double v0 = liveSpeed(from);
+        double v1 = liveSpeed(to);
+        double travel = travelTime(segment, v0, v1);
+        double moving = Math.max(0.0, Math.min(travel, mElapsedInSegment));
+
+        return distanceAt(v0, v1, moving, travel, segment);
     }
 
     /** 速度非法时回退到一个安全值，避免除零 */

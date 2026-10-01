@@ -150,6 +150,7 @@ public class ScriptStore {
         if (route.fromBd09 != null) {
             object.put("bd09", route.fromBd09.booleanValue());
         }
+        object.put("edited", route.edited);
         return object;
     }
 
@@ -167,6 +168,7 @@ public class ScriptStore {
             if (object.has("bd09")) {
                 route.fromBd09 = object.optBoolean("bd09", false);
             }
+            route.edited = object.optBoolean("edited", false);
             return route;
         } catch (Exception e) {
             XLog.e("SCRIPT: parse failed");

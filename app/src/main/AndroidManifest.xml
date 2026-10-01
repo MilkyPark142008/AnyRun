@@ -27,8 +27,7 @@
         android:name="android.permission.ACCESS_MOCK_LOCATION"
         tools:ignore="MockLocation,ProtectedPermissions" />
 
-    <!-- 应用内更新：下载 APK 后拉起系统安装器 -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 应用内更新已移除（去掉了检查更新入口和下载逻辑） -->
 
     <application
         android:name=".GoApplication"

@@ -190,6 +190,8 @@ public class ScriptEditActivity extends BaseActivity {
         mRoute.endMode = mLoopCheck.isChecked() ? ScriptRoute.END_LOOP : ScriptRoute.END_STOP;
         // 坐标系记在这条脚本自己身上，之后改全局单选也不会让它偏移
         mRoute.fromBd09 = fromBd09;
+        // 标记“用户手动改过”，主界面重新选点时就不会再覆盖这条脚本
+        mRoute.edited = true;
 
         mStore.save(mRoute);
         PreferenceManager.getDefaultSharedPreferences(this).edit()

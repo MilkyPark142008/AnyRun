@@ -126,7 +126,6 @@
     <string name="nav_menu_settings">设置</string>
     <string name="nav_menu_dev">开发人员选项</string>
     <string name="nav_menu_more">更多</string>
-    <string name="nav_menu_upgrade">检测更新</string>
     <string name="nav_menu_feedback">问题反馈</string>
     <string name="nav_menu_contact">联系作者</string>
     <string name="nav_app_tips">仅供学习使用，否则后果自负!</string>
@@ -152,7 +151,10 @@
     <string name="nav_menu_script">脚本模式</string>
     <string name="script_button">脚本模式</string>
     <string name="script_title">脚本模式</string>
-    <string name="script_tips">每行一个路点：状态 经度 纬度 [速度] [停留秒数]；状态支持 步行/跑步/骑行（walk/run/bike）。点击某一行开始播放，长按可删除。</string>
+    <string name="script_tips">每行一个路点：状态 经度 纬度 [速度] [停留秒数]；状态支持 步行/跑步/骑行（walk/run/bike）。点击某一行编辑，点右侧 ▶ 开始播放，长按可删除。</string>
+    <string name="script_mode_live_hint">播放中切换：</string>
+    <string name="mode_switched">已切换为%1$s</string>
+    <string name="mode_switch_fail">当前没有在移动，无法切换</string>
     <string name="script_idle">还没有脚本，点右下角“+”新建一个</string>
     <string name="script_new">新建脚本</string>
     <string name="script_start">开始播放</string>

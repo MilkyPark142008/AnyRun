@@ -1,15 +1,12 @@
 package com.zcshou.gogogo;
 
 import android.Manifest;
-import android.app.DownloadManager;
-import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -29,13 +26,10 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
 import android.text.TextUtils;
-import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.view.Window;
-import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -75,12 +69,7 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.navigation.NavigationView;
 import com.google.android.material.snackbar.Snackbar;
 
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-
 import java.io.File;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -101,12 +90,7 @@ import com.zcshou.utils.TileSourceUtils;
 
 import com.elvishew.xlog.XLog;
 
-import io.noties.markwon.Markwon;
-import okhttp3.Call;
-import okhttp3.Callback;
 import okhttp3.OkHttpClient;
-import okhttp3.Response;
-import okhttp3.ResponseBody;
 
 public class MainActivity extends BaseActivity implements SensorEventListener {
     /* 对外 */
@@ -175,6 +159,8 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
      * 每次重新选点都覆盖同一条，避免脚本列表里堆满“地图路线”。
      */
     private static final String MAP_ROUTE_ID = "map_route_from_main_map";
+    /** 记录最近一次“主界面选点”生成的路线 id（被编辑过会换成新 id） */
+    private static final String KEY_MAIN_MAP_ROUTE_ID = "main_map_route_id";
     /** 路线选点模式开关：开启时点地图是“往路线末尾加一个路点”，而不是原来的“选一个传送点” */
     private boolean mRoutePicking = false;
     /** 已选路点（WGS-84，与 ServiceGo / ScriptPlayer 使用的坐标语义一致） */
@@ -201,12 +187,6 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     private ListView mSearchHistoryList;
     private LinearLayout mHistoryLayout;
     private MenuItem searchItem;
-    /*============================== 更新 相关 ==============================*/
-    private DownloadManager mDownloadManager = null;
-    private long mDownloadId;
-    private BroadcastReceiver mDownloadBdRcv;
-    private String mUpdateFilename;
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -246,6 +226,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             int modeOrdinal = savedInstanceState.getInt(STATE_ROUTE_MODE, 0);
             if (modeOrdinal >= 0 && modeOrdinal < modes.length) {
                 mRouteMode = modes[modeOrdinal];
+                // 让下拉跟上恢复出来的状态，避免回显成默认的“步行”
+                if (mRouteModeSpinner != null) {
+                    mRouteModeSpinner.setSelection(modeOrdinal);
+                }
             }
             // 恢复“正在选点”的界面状态，但不弹提示（旋屏不该再提示一次）
             if (savedInstanceState.getBoolean(STATE_ROUTE_PICKING, false)) {
@@ -278,10 +262,6 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         initStoreHistory();
 
         initSearchView();
-
-        initUpdateVersion();
-
-        checkUpdateVersion(false);
     }
 
     @Override
@@ -355,12 +335,6 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             isMockServStart = false;
         } else {
             unbindServiceIfNeeded();
-        }
-
-        try {
-            unregisterReceiver(mDownloadBdRcv);
-        } catch (Exception e) {
-            XLog.e("ERROR: unregisterReceiver");
         }
 
         unregisterSensorListener();
@@ -563,8 +537,6 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                         GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_dev));
                     }
                 }
-            } else if (id == R.id.nav_update) {
-                checkUpdateVersion(true);
             } else if (id == R.id.nav_feedback) {
                 File file = new File(getExternalFilesDir("Logs"), GoApplication.LOG_FILE_NAME);
                 ShareUtils.shareFile(this, file, item.getTitle().toString());
@@ -1269,8 +1241,17 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             mRouteModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
                 @Override
                 public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                    mRouteMode = position == 1 ? ScriptWaypoint.Mode.RUN
+                    ScriptWaypoint.Mode mode = position == 1 ? ScriptWaypoint.Mode.RUN
                             : position == 2 ? ScriptWaypoint.Mode.BIKE : ScriptWaypoint.Mode.WALK;
+                    // setAdapter / setSelection 触发的回声与当前取值一致时忽略，
+                    // 避免进入选点模式的瞬间误切一次移动状态
+                    if (mode == mRouteMode) {
+                        return;
+                    }
+
+                    mRouteMode = mode;
+                    // 路线正在跑时，切换同时对剩余路段生效（走 / 跑 / 骑随时切）
+                    applyLiveMode(mode);
                 }
 
                 @Override
@@ -1423,9 +1404,38 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
     }
 
-    /** 当前正在跑的路线是不是主界面选的这条 */
+    /** 当前正在跑的路线是不是主界面选的这条（含被编辑后另存的替换路线） */
     private boolean isMapRoutePlaying() {
-        return MAP_ROUTE_ID.equals(mRunningScriptId);
+        if (mRunningScriptId == null) {
+            return false;
+        }
+
+        String preferredId = sharedPreferences.getString(KEY_MAIN_MAP_ROUTE_ID, MAP_ROUTE_ID);
+        return mRunningScriptId.equals(preferredId) || MAP_ROUTE_ID.equals(mRunningScriptId);
+    }
+
+    /**
+     * 播放中切换移动状态；没在播放时静默返回（下拉的取值已记在 mRouteMode 里，
+     * 等开始移动时作为新路点的默认状态）。
+     */
+    private void applyLiveMode(ScriptWaypoint.Mode mode) {
+        if (mRunningScriptId == null || mode == null) {
+            return;
+        }
+
+        if (mServiceBinder == null) {
+            // 脚本是在脚本模式页面启动的，这里还没绑上；补绑一次，稍后切换才会生效
+            bindServiceIfNeeded();
+            return;
+        }
+
+        try {
+            boolean ok = mServiceBinder.switchLiveMode(mode);
+            GoUtils.DisplayToast(this, getResources().getString(
+                    ok ? R.string.mode_switched : R.string.mode_switch_fail, mode.label));
+        } catch (Exception e) {
+            XLog.e("ERROR: switchLiveMode", e);
+        }
     }
 
     /** 把当前选点存成一条脚本路线，并让 ServiceGo 沿路线平滑移动 */
@@ -1504,8 +1514,19 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
      * 二是让这条路线在脚本模式里能直接看到和编辑。</p>
      */
     private ScriptRoute buildMapRoute() {
+        // 上一次“主界面选点”生成的路线 id；它被手动编辑过就不再覆盖，另存后记住新的 id
+        String preferredId = sharedPreferences.getString(KEY_MAIN_MAP_ROUTE_ID, MAP_ROUTE_ID);
+        ScriptStore store = new ScriptStore(this);
+        ScriptRoute existing = store.load(preferredId);
+
         ScriptRoute route = new ScriptRoute();
-        route.id = MAP_ROUTE_ID;
+        if (existing != null && existing.edited) {
+            // 这条路线已经被用户在脚本界面改过，不能再覆盖它：本次选点另存为一条新脚本，
+            // 并记住新 id，后续选点继续覆盖这条新的
+            sharedPreferences.edit().putString(KEY_MAIN_MAP_ROUTE_ID, route.id).apply();
+        } else {
+            route.id = preferredId;
+        }
         route.name = getResources().getString(R.string.route_default_name);
         route.endMode = ScriptRoute.END_STOP;
         route.points = new ArrayList<>(mRoutePoints);
@@ -1920,136 +1941,4 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         return data;
     }
 
-    /*============================== 更新 相关 ==============================*/
-    private void initUpdateVersion() {
-        mDownloadManager =(DownloadManager) MainActivity.this.getSystemService(DOWNLOAD_SERVICE);
-
-        // 用于监听下载完成后，转到安装界面
-        mDownloadBdRcv = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                installNewVersion();
-            }
-        };
-        registerReceiver(mDownloadBdRcv, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
-    }
-
-    private void checkUpdateVersion(boolean result) {
-        String mapApiUrl = "https://api.github.com/repos/zcshou/gogogo/releases/latest";
-
-        okhttp3.Request request = new okhttp3.Request.Builder().url(mapApiUrl).get().build();
-        final Call call = mOkHttpClient.newCall(request);
-        call.enqueue(new Callback() {
-            @Override
-            public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                XLog.i("更新检测失败");
-            }
-
-            @Override
-            public void onResponse(@NonNull Call call, @NonNull okhttp3.Response response) throws IOException {
-                ResponseBody responseBody = response.body();
-                if (responseBody != null) {
-                    String resp = responseBody.string();
-                    // 注意，该请求在子线程，不能直接操作界面
-                    runOnUiThread(() -> {
-                        try {
-                            JSONObject getRetJson = new JSONObject(resp);
-                            String curVersion = GoUtils.getVersionName(MainActivity.this);
-
-                            if (curVersion != null
-                                    && (!getRetJson.getString("name").contains(curVersion)
-                                    || !getRetJson.getString("tag_name").contains(curVersion))) {
-                                final android.app.AlertDialog alertDialog = new android.app.AlertDialog.Builder(MainActivity.this).create();
-                                alertDialog.show();
-                                alertDialog.setCancelable(false);
-                                Window window = alertDialog.getWindow();
-                                if (window != null) {
-                                    window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);      // 防止出现闪屏
-                                    window.setContentView(R.layout.update);
-                                    window.setGravity(Gravity.CENTER);
-                                    window.setWindowAnimations(R.style.DialogAnimFadeInFadeOut);
-
-                                    TextView updateTitle = window.findViewById(R.id.update_title);
-                                    updateTitle.setText(getRetJson.getString("name"));
-                                    TextView updateTime = window.findViewById(R.id.update_time);
-                                    updateTime.setText(getRetJson.getString("created_at"));
-                                    TextView updateCommit = window.findViewById(R.id.update_commit);
-                                    updateCommit.setText(getRetJson.getString("target_commitish"));
-
-                                    TextView updateContent = window.findViewById(R.id.update_content);
-                                    final Markwon markwon = Markwon.create(MainActivity.this);
-                                    markwon.setMarkdown(updateContent, getRetJson.getString("body"));
-
-                                    Button updateCancel = window.findViewById(R.id.update_ignore);
-                                    updateCancel.setOnClickListener(v -> alertDialog.cancel());
-
-                                    /* 这里用来保存下载地址 */
-                                    JSONArray jsonArray = new JSONArray(getRetJson.getString("assets"));
-                                    JSONObject jsonObject = jsonArray.getJSONObject(0);
-                                    String download_url = jsonObject.getString("browser_download_url");
-                                    mUpdateFilename = jsonObject.getString("name");
-
-                                    Button updateAgree = window.findViewById(R.id.update_agree);
-                                    updateAgree.setOnClickListener(v -> {
-                                        alertDialog.cancel();
-                                        GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.update_downloading));
-                                        downloadNewVersion(download_url);
-                                    });
-                                }
-                            } else {
-                                if (result) {
-                                    GoUtils.DisplayToast(MainActivity.this, getResources().getString(R.string.update_last));
-                                }
-                            }
-                        } catch (JSONException e) {
-                            XLog.e("ERROR: resolve json");
-                        }
-                    });
-                }
-            }
-        });
-    }
-
-    private void downloadNewVersion(String url) {
-        if (mDownloadManager == null) {
-            return;
-        }
-
-        DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-        request.setAllowedOverRoaming(false);
-        request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-        request.setTitle(GoUtils.getAppName(this));
-        request.setDescription("正在下载新版本...");
-        request.setMimeType("application/vnd.android.package-archive");
-
-        // DownloadManager不会覆盖已有的同名文件，需要自己来删除已存在的文件
-        File file = new File(getExternalFilesDir("Updates"), mUpdateFilename);
-        if (file.exists()) {
-            if(!file.delete()) {
-                return;
-            }
-        }
-        request.setDestinationUri(Uri.fromFile(file));
-
-        mDownloadId = mDownloadManager.enqueue(request);
-    }
-
-    private void installNewVersion() {
-        Intent install = new Intent(Intent.ACTION_VIEW);
-        Uri downloadFileUri = mDownloadManager.getUriForDownloadedFile(mDownloadId);
-        File file = new File(getExternalFilesDir("Updates"), mUpdateFilename);
-        if (downloadFileUri != null) {
-            install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            // 在Broadcast中启动活动需要添加Intent.FLAG_ACTIVITY_NEW_TASK
-            install.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);    //添加这一句表示对目标应用临时授权该Uri所代表的文件
-            install.addCategory("android.intent.category.DEFAULT");
-            install.setDataAndType(ShareUtils.getUriFromFile(MainActivity.this, file), "application/vnd.android.package-archive");
-            startActivity(install);
-        } else {
-            Intent intent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
-            intent.addCategory("android.intent.category.DEFAULT");
-            startActivity(intent);
-        }
-    }
 }
