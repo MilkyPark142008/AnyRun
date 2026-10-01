@@ -572,7 +572,8 @@ public class ServiceGo extends Service {
                     if (mScriptStore != null) {
                         mScriptStore.setRunningScriptId(null);
                     }
-                    PreferenceManager.getDefaultSharedPreferences(this).edit()
+                    // 注意：这里在匿名 Handler 内部，this 是匿名对象不是 Service，必须写 ServiceGo.this
+                    PreferenceManager.getDefaultSharedPreferences(ServiceGo.this).edit()
                             .remove(KEY_LAST_SCRIPT_ID)
                             .apply();
                 } catch (Exception e) {
