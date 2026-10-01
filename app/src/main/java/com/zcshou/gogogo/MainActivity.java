@@ -252,6 +252,13 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 }
             }
             redrawRoute();
+
+            // “单点模拟中”是实例字段，必须跨重建活下来：否则重建后 FAB 图标退回未启动态、
+            // “终止模拟”入口失效，而且重建后的实例退出时不再 stopService（服务泄漏）
+            isMockServStart = savedInstanceState.getBoolean(STATE_MOCK_SERVING, false);
+            if (mButtonStart != null) {
+                mButtonStart.setImageResource(isMockServStart ? R.drawable.ic_fly : R.drawable.ic_position);
+            }
         }
 
         mConnection = new ServiceConnection() {
@@ -293,6 +300,8 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     private static final String STATE_ROUTE_POINTS = "state_route_points";
     private static final String STATE_ROUTE_MODE = "state_route_mode";
     private static final String STATE_ROUTE_PICKING = "state_route_picking";
+    /** 旋屏 / 重建时保存的“单点模拟是否在跑” */
+    private static final String STATE_MOCK_SERVING = "state_mock_serving";
 
     @Override
     protected void onSaveInstanceState(@NonNull Bundle outState) {
@@ -302,6 +311,8 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         outState.putString(STATE_ROUTE_POINTS, ScriptStore.encodePoints(mRoutePoints));
         outState.putInt(STATE_ROUTE_MODE, mRouteMode.ordinal());
         outState.putBoolean(STATE_ROUTE_PICKING, mRoutePicking);
+        // 单点模拟的运行标记：跨重建保存，重建后 FAB 状态与退出收尾都靠它
+        outState.putBoolean(STATE_MOCK_SERVING, isMockServStart);
     }
 
     @Override
@@ -309,6 +320,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         XLog.i("MainActivity: onResume");
         if (mMapView != null) {
             mMapView.onResume();
+            // 回到界面前模拟位置服务可能移除过测试提供者，这一帧 enable 会失败：
+            // 立即补一次，再延迟补一次，等提供者建回来箭头就能恢复
+            ensureMyLocationEnabled();
+            mMapView.postDelayed(this::ensureMyLocationEnabled, 800);
         }
         if (mSensorManager != null && mSensorAccelerometer != null) {
             mSensorManager.registerListener(this, mSensorAccelerometer, SensorManager.SENSOR_DELAY_UI);
@@ -346,7 +361,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     protected void onDestroy() {
         XLog.i("MainActivity: onDestroy");
 
-        if (isMockServStart) {
+        // 只有真正退出界面（isFinishing）才停服务：旋屏 / 配置变化导致的重建只解绑，
+        // 否则单点模拟和播放中的脚本会被旧实例顺手 kill 掉（“转个屏脚本就停了”）。
+        // 重建后的实例已通过 onSaveInstanceState 恢复 isMockServStart，最终退出时仍会正确收尾。
+        if (isFinishing() && isMockServStart) {
             try {
                 unbindServiceIfNeeded();
                 Intent serviceGoIntent = new Intent(MainActivity.this, ServiceGo.class);
@@ -1237,12 +1255,37 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
 
     /** 按当前是否在播放脚本切换入口按钮的图标（路线操作条上的按钮随之刷新） */
     private void updateScriptButton() {
+        // 脚本启停可能伴随模拟位置服务重建，顺手确保定位图层还开着
+        ensureMyLocationEnabled();
+
         if (mButtonScript != null) {
             boolean running = mRunningScriptId != null;
             mButtonScript.setImageResource(running ? R.drawable.ic_close : R.drawable.ic_script);
         }
 
         updateRouteUi();
+    }
+
+    /**
+     * 确保地图的定位图层（人物箭头）处于开启状态，并重新注册一次监听。
+     *
+     * <p>模拟位置服务销毁时会移除 GPS / 网络测试提供者，这期间回到界面对图层调
+     * enableMyLocation() 会因为“没有可用提供者”**静默失败**（GpsMyLocationProvider
+     * 吞掉异常返回 false，图层的 mIsLocationEnabled 置为 false 且不再自动重试），
+     * 表现就是“脚本执行 → 取消 → 再执行后人物箭头不见了”，而模拟位置本身照常。
+     * 这里在界面刷新、脚本状态变化、回到界面时各补一次；enableMyLocation 内部会
+     * 先 stop 再 start，顺带把服务重建后失效的旧监听换成新的。</p>
+     */
+    private void ensureMyLocationEnabled() {
+        if (mMyLocationOverlay == null) {
+            return;
+        }
+
+        try {
+            mMyLocationOverlay.enableMyLocation();
+        } catch (Exception e) {
+            XLog.e("ERROR: enableMyLocation", e);
+        }
     }
 
     /**
@@ -1548,6 +1591,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             updateScriptButton();
             // 服务已经在跑时立刻校验一次：服务端没在播就用 binder 补启动
             ensureScriptPlaying(route.id);
+            // 服务可能正在（重）建测试提供者：延迟再补一次，让定位图层重新挂上监听
+            if (mMapView != null) {
+                mMapView.postDelayed(this::ensureMyLocationEnabled, 600);
+            }
             GoUtils.DisplayToast(this, getResources().getString(R.string.route_started,
                     route.points.size(), ScriptParser.formatDistance(ScriptParser.totalDistance(route))));
         } catch (Exception e) {

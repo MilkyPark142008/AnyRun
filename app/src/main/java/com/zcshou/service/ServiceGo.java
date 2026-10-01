@@ -405,6 +405,18 @@ public class ServiceGo extends Service {
         return value == null || value.trim().isEmpty();
     }
 
+    /**
+     * 注入用的朝向：统一到 0~360 并避开 0。
+     *
+     * <p>Location.setBearing(0) 会把“有朝向”标记清掉（hasBearing() 变成 false），
+     * 地图定位图层就会改画小人而不是方向箭头；脚本到达终点段的 bearing(点,点)、
+     * 服务默认朝向都会算出 0，这里统一挡掉，保证人物箭头始终显示。</p>
+     */
+    private float injectionBearing() {
+        float bearing = (mCurBea + 360.0f) % 360.0f;
+        return bearing == 0.0f ? 0.01f : bearing;
+    }
+
     /*============================== 脚本模式 ==============================*/
 
     /** 创建一个绑定到本服务的脚本播放器（只创建一次） */
@@ -637,7 +649,7 @@ public class ServiceGo extends Service {
             Location loc = new Location(LocationManager.GPS_PROVIDER);
             loc.setAccuracy(Criteria.ACCURACY_FINE);    // 设定此位置的估计水平精度，以米为单位。
             loc.setAltitude(mCurAlt);                     // 设置高度，在 WGS 84 参考坐标系中的米
-            loc.setBearing(mCurBea);                       // 方向（度）
+            loc.setBearing(injectionBearing());           // 方向（度；避开 0，见 injectionBearing）
             loc.setLatitude(mCurLat);                   // 纬度（度）
             loc.setLongitude(mCurLng);                  // 经度（度）
             loc.setTime(System.currentTimeMillis());    // 本地时间
@@ -707,7 +719,7 @@ public class ServiceGo extends Service {
             Location loc = new Location(LocationManager.NETWORK_PROVIDER);
             loc.setAccuracy(Criteria.ACCURACY_COARSE);  // 设定此位置的估计水平精度，以米为单位。
             loc.setAltitude(mCurAlt);                     // 设置高度，在 WGS 84 参考坐标系中的米
-            loc.setBearing(mCurBea);                       // 方向（度）
+            loc.setBearing(injectionBearing());           // 方向（度；避开 0，见 injectionBearing）
             loc.setLatitude(mCurLat);                   // 纬度（度）
             loc.setLongitude(mCurLng);                  // 经度（度）
             loc.setTime(System.currentTimeMillis());    // 本地时间
