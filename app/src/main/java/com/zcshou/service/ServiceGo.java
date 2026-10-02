@@ -174,6 +174,9 @@ public class ServiceGo extends Service {
         mCurLng = lng;
         mCurLat = lat;
         mCurAlt = alt;
+        // 顺序很重要：先把 mCur 写好，再保存。
+        // 这里刚刚从 intent / 上次位置恢复坐标，此时“脚本还没开始、服务已经活着”，
+        // 若 saveLastPosition 内部按“服务活着 = 模拟接管”提前 return，恢复用的坐标就存不下来了
         saveLastPosition();
 
         if (mJoyStick != null) {
@@ -640,12 +643,29 @@ public class ServiceGo extends Service {
     }
 
     /**
-     * 当前是否由“模拟位置”接管坐标（脚本播放或点击移动）。
+     * 当前是否由“模拟位置”接管坐标。
      *
-     * <p>真实定位回调只能在这两个功能都没接管时才更新当前坐标。</p>
+     * <p>只要服务在跑（单点模拟 / 脚本 / 点击移动），真实定位就一律不许改写当前坐标，
+     * 只能记进 mRealLng / mRealLat。判定刻意做得宽松：</p>
+     *
+     * <ul>
+     *   <li>脚本：状态 + 播放器双确认，状态残留时不会误锁；</li>
+     *   <li>点击移动：开关看着很窄，但 mClickMoveEnabled 是 volatile，
+     *       与 Binder 线程之间没有内存屏障问题，这里再加上“服务已启动”的兜底；</li>
+     *   <li>单点模拟：没有任何“正在进行中”的标记，用 isStop 之外最简单的判据——
+     *       服务活着就归它管，这样切应用回来绝不会有真实定位插进来。</li>
+     * </ul>
      */
     private boolean isMockDrivingPosition() {
-        return isScriptDrivingPosition() || mClickMoveEnabled && mHasClickTarget;
+        if (isScriptDrivingPosition()) {
+            return true;
+        }
+        if (mClickMoveEnabled && mHasClickTarget) {
+            return true;
+        }
+        // 服务活着就认为模拟位置在接管：mLocHandler 一直在循环注入坐标，
+        // 此时真实定位只应作为“参考位置”保存，绝不能改写当前坐标
+        return !isStop;
     }
 
     /**
@@ -781,6 +801,9 @@ public class ServiceGo extends Service {
             // 注：脚本运行期间这里不写盘。保存的坐标是“服务被系统重启后恢复用”的，
             // 若每 tick 都把脚本行进中的坐标写进去，服务重启后会从脚本半途接上，
             // 反而让“重启恢复”变得不可预期；脚本起点在 startScript 里已经存过一次。
+            //
+            // 这里只判“脚本是否在播”，不要用 isMockDrivingPosition()：后者把
+            // “服务活着”也算作接管，会让 onStartCommand 里刚恢复的坐标存不下去。
             if (isScriptDrivingPosition()) {
                 return;
             }
