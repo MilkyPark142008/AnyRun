@@ -274,10 +274,10 @@
 
     <!-- 点击移动：连续添加目标点 + 行进轨迹 -->
     <string name="click_move_hint_empty">点击地图添加目标，可连续添加多个</string>
-    <string name="click_move_hint_count">已添加 %1$d 个目标 · 点地图继续添加</string>
+    <string name="click_move_hint_count">还有 %1$d 个目标待走 · 点地图继续添加</string>
     <string name="click_move_point_title">目标 %1$d</string>
     <string name="click_move_go">开始行走</string>
     <string name="click_move_stop">停止行走</string>
-    <string name="click_move_empty">还没有添加目标点</string>
+    <string name="click_move_empty">还没有待走的目标点</string>
     <string name="click_move_finished">已走完全部目标</string>
 </resources>

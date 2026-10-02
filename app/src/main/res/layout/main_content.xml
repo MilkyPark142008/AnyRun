@@ -30,237 +30,382 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="?attr/actionBarSize" />
 
-        <com.google.android.material.floatingactionbutton.FloatingActionButton
-            android:id="@+id/faBtnStart"
+        <!--
+            左下角悬浮操作列：路线选点 → 脚本 → 单点模拟（从上到下）。
+            起始边距统一 16dp（原先 FAB 是 30dp、移动方式开关是 16dp，左右没对齐），
+            列内 14dp 间距就是原先 80 / 150 / 220dp 手工定位实际表达出的空隙。
+            移动方式开关刻意留在列外当兄弟节点：放进列里的话它一显隐整列高度就变，
+            三枚 FAB 会跟着上下跳，容易点错。
+        -->
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="bottom|start"
-            android:layout_marginStart="30dp"
+            android:layout_marginStart="16dp"
             android:layout_marginBottom="80dp"
-            android:contentDescription="@null"
-            app:elevation="6dp"
-            app:pressedTranslationZ="12dp"
-            app:srcCompat="@drawable/ic_position" />
+            android:orientation="vertical">
 
-        <com.google.android.material.floatingactionbutton.FloatingActionButton
-            android:id="@+id/faBtnScript"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="bottom|start"
-            android:layout_marginStart="30dp"
-            android:layout_marginBottom="150dp"
-            android:contentDescription="@string/script_button"
-            app:elevation="6dp"
-            app:pressedTranslationZ="12dp"
-            app:srcCompat="@drawable/ic_script" />
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/faBtnRoute"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:contentDescription="@string/route_button"
+                app:elevation="6dp"
+                app:pressedTranslationZ="12dp"
+                app:srcCompat="@drawable/ic_route" />
 
-        <com.google.android.material.floatingactionbutton.FloatingActionButton
-            android:id="@+id/faBtnRoute"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="bottom|start"
-            android:layout_marginStart="30dp"
-            android:layout_marginBottom="220dp"
-            android:contentDescription="@string/route_button"
-            app:elevation="6dp"
-            app:pressedTranslationZ="12dp"
-            app:srcCompat="@drawable/ic_route" />
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/faBtnScript"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:contentDescription="@string/script_button"
+                app:elevation="6dp"
+                app:pressedTranslationZ="12dp"
+                app:srcCompat="@drawable/ic_script" />
+
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/faBtnStart"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:contentDescription="@null"
+                app:elevation="6dp"
+                app:pressedTranslationZ="12dp"
+                app:srcCompat="@drawable/ic_position" />
+        </LinearLayout>
 
         <!--
             移动方式开关：点击移动 ⇄ 摇杆移动。
             模拟位置（单点或脚本）启动后出现在左下角，结束后消失；
             文案显示当前生效的方式，点击即互切。
+            背景用 M3 次级容器色，48dp 触摸高度，与上面 FAB 列同为 16dp 起始边距。
         -->
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/click_move_switch"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="bottom|start"
             android:layout_marginStart="16dp"
-            android:layout_marginBottom="10dp"
+            android:layout_marginBottom="16dp"
+            android:fontFamily="sans-serif-medium"
+            android:minHeight="48dp"
             android:minWidth="0dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
             android:text="@string/move_mode_joystick"
-            android:textSize="13sp"
-            android:visibility="gone" />
+            android:textColor="@color/m3_on_secondary_container"
+            android:textSize="14sp"
+            android:visibility="gone"
+            app:backgroundTint="@color/m3_secondary_container"
+            app:cornerRadius="24dp"
+            app:strokeWidth="0dp" />
 
-        <LinearLayout
+        <!--
+            搜索结果 / 搜索历史：圆角卡片浮层，两侧留 8dp 边距，
+            不再是整屏宽的半透明白底（原先 #ddffffff 直接压在地图上，边界糊成一片）。
+        -->
+        <com.google.android.material.card.MaterialCardView
             android:id="@+id/search_linear"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#ddffffff"
+            android:layout_gravity="top"
+            android:layout_marginStart="8dp"
+            android:layout_marginTop="?attr/actionBarSize"
+            android:layout_marginEnd="8dp"
             android:visibility="gone"
-            android:layout_marginTop="?attr/actionBarSize">
+            app:cardBackgroundColor="@color/m3_surface"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp"
+            app:contentPadding="8dp"
+            app:strokeWidth="0dp">
+
             <ListView
                 android:id="@+id/search_list_view"
                 android:layout_width="match_parent"
-                android:layout_margin="10dp"
-                android:layout_height="wrap_content">
-            </ListView>
-        </LinearLayout>
+                android:layout_height="wrap_content" />
+        </com.google.android.material.card.MaterialCardView>
 
-        <LinearLayout
+        <com.google.android.material.card.MaterialCardView
             android:id="@+id/search_history_linear"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#ddffffff"
+            android:layout_gravity="top"
+            android:layout_marginStart="8dp"
+            android:layout_marginTop="?attr/actionBarSize"
+            android:layout_marginEnd="8dp"
             android:visibility="gone"
-            android:layout_marginTop="?attr/actionBarSize">
+            app:cardBackgroundColor="@color/m3_surface"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp"
+            app:contentPadding="8dp"
+            app:strokeWidth="0dp">
+
             <ListView
                 android:id="@+id/search_history_list_view"
                 android:layout_width="match_parent"
-                android:layout_margin="10dp"
-                android:layout_height="wrap_content">
-            </ListView>
-        </LinearLayout>
+                android:layout_height="wrap_content" />
+        </com.google.android.material.card.MaterialCardView>
 
         <!--
             路线选点操作条：只在“路线选点”模式下显示。
-            放在顶部（右侧留出地图类型切换按钮的位置）是为了不和左下角三个悬浮按钮打架。
+            卡片浮在地图顶部，右侧留出地图类型单选组（90dp 宽 + 5dp 外边距）的位置。
+            分三行：提示 → 走行方式与撤销清空 → 退出与开始。
+            原先是 5 个控件硬挤一行，只能把内边距压到 2dp、字号压到 12sp，
+            远低于 M3 的 48dp 触摸目标，横向也不再有溢出风险。
         -->
-        <LinearLayout
+        <com.google.android.material.card.MaterialCardView
             android:id="@+id/route_bar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="top"
             android:layout_marginStart="8dp"
             android:layout_marginTop="?attr/actionBarSize"
-            android:layout_marginEnd="100dp"
-            android:background="#e6ffffff"
-            android:orientation="vertical"
-            android:padding="8dp"
-            android:visibility="gone">
-
-            <TextView
-                android:id="@+id/route_hint"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/route_hint_empty"
-                android:textSize="12sp" />
+            android:layout_marginEnd="104dp"
+            android:visibility="gone"
+            app:cardBackgroundColor="@color/m3_surface"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp"
+            app:contentPadding="8dp"
+            app:strokeWidth="0dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:orientation="vertical">
 
-                <Spinner
-                    android:id="@+id/route_mode"
-                    android:layout_width="0dp"
+                <TextView
+                    android:id="@+id/route_hint"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1.4" />
-
-                <Button
-                    android:id="@+id/route_undo"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:minWidth="0dp"
-                    android:paddingStart="2dp"
-                    android:paddingEnd="2dp"
-                    android:text="@string/route_undo"
+                    android:text="@string/route_hint_empty"
+                    android:textColor="@color/m3_on_surface_variant"
                     android:textSize="12sp" />
 
-                <Button
-                    android:id="@+id/route_clear"
-                    android:layout_width="0dp"
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:minWidth="0dp"
-                    android:paddingStart="2dp"
-                    android:paddingEnd="2dp"
-                    android:text="@string/route_clear"
-                    android:textSize="12sp" />
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    tools:ignore="NestedWeights">
 
-                <Button
-                    android:id="@+id/route_go"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1.5"
-                    android:minWidth="0dp"
-                    android:paddingStart="2dp"
-                    android:paddingEnd="2dp"
-                    android:text="@string/route_go"
-                    android:textSize="12sp" />
+                    <Spinner
+                        android:id="@+id/route_mode"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1.4"
+                        android:minHeight="48dp" />
 
-                <Button
-                    android:id="@+id/route_close"
-                    android:layout_width="0dp"
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/route_undo"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:fontFamily="sans-serif-medium"
+                        android:minHeight="48dp"
+                        android:minWidth="0dp"
+                        android:paddingEnd="4dp"
+                        android:paddingStart="4dp"
+                        android:text="@string/route_undo"
+                        android:textColor="@color/m3_on_secondary_container"
+                        android:textSize="14sp"
+                        app:backgroundTint="@color/m3_secondary_container"
+                        app:cornerRadius="12dp"
+                        app:icon="@drawable/ic_left"
+                        app:iconGravity="textStart"
+                        app:iconPadding="6dp"
+                        app:iconSize="16dp"
+                        app:iconTint="@color/m3_on_secondary_container"
+                        app:strokeWidth="0dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/route_clear"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:fontFamily="sans-serif-medium"
+                        android:minHeight="48dp"
+                        android:minWidth="0dp"
+                        android:paddingEnd="4dp"
+                        android:paddingStart="4dp"
+                        android:text="@string/route_clear"
+                        android:textColor="@color/m3_on_secondary_container"
+                        android:textSize="14sp"
+                        app:backgroundTint="@color/m3_secondary_container"
+                        app:cornerRadius="12dp"
+                        app:icon="@drawable/ic_delete"
+                        app:iconGravity="textStart"
+                        app:iconPadding="6dp"
+                        app:iconSize="16dp"
+                        app:iconTint="@color/m3_on_secondary_container"
+                        app:strokeWidth="0dp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1.2"
-                    android:minWidth="0dp"
-                    android:paddingStart="2dp"
-                    android:paddingEnd="2dp"
-                    android:text="@string/route_exit"
-                    android:textSize="12sp" />
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    tools:ignore="NestedWeights">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/route_close"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:fontFamily="sans-serif-medium"
+                        android:minHeight="48dp"
+                        android:minWidth="0dp"
+                        android:paddingEnd="4dp"
+                        android:paddingStart="4dp"
+                        android:text="@string/route_exit"
+                        android:textColor="@color/m3_on_secondary_container"
+                        android:textSize="14sp"
+                        app:backgroundTint="@color/m3_secondary_container"
+                        app:cornerRadius="12dp"
+                        app:icon="@drawable/ic_close"
+                        app:iconGravity="textStart"
+                        app:iconPadding="6dp"
+                        app:iconSize="16dp"
+                        app:iconTint="@color/m3_on_secondary_container"
+                        app:strokeWidth="0dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/route_go"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1.6"
+                        android:fontFamily="sans-serif-medium"
+                        android:minHeight="48dp"
+                        android:minWidth="0dp"
+                        android:paddingEnd="4dp"
+                        android:paddingStart="4dp"
+                        android:text="@string/route_go"
+                        android:textColor="@color/white"
+                        android:textSize="14sp"
+                        app:backgroundTint="@color/colorPrimary"
+                        app:cornerRadius="12dp"
+                        app:icon="@drawable/ic_move"
+                        app:iconGravity="textStart"
+                        app:iconPadding="6dp"
+                        app:iconSize="16dp"
+                        app:iconTint="@color/white"
+                        app:strokeWidth="0dp" />
+                </LinearLayout>
             </LinearLayout>
-        </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
 
         <!--
             点击移动操作条：点击移动模式下点地图即可连续添加目标点，
             这条操作条负责撤回 / 清空 / 开始行走，交互与上面的路线选点保持一致。
+            同样卡片化 + 图标按钮，触摸高度 48dp。
         -->
-        <LinearLayout
+        <com.google.android.material.card.MaterialCardView
             android:id="@+id/click_move_bar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="top"
             android:layout_marginStart="8dp"
             android:layout_marginTop="?attr/actionBarSize"
-            android:layout_marginEnd="100dp"
-            android:background="#e6ffffff"
-            android:orientation="vertical"
-            android:padding="8dp"
-            android:visibility="gone">
-
-            <TextView
-                android:id="@+id/click_move_hint"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/click_move_hint_empty"
-                android:textSize="12sp" />
+            android:layout_marginEnd="104dp"
+            android:visibility="gone"
+            app:cardBackgroundColor="@color/m3_surface"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp"
+            app:contentPadding="8dp"
+            app:strokeWidth="0dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:orientation="vertical">
 
-                <Button
-                    android:id="@+id/click_move_undo"
-                    android:layout_width="0dp"
+                <TextView
+                    android:id="@+id/click_move_hint"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:minWidth="0dp"
-                    android:paddingStart="2dp"
-                    android:paddingEnd="2dp"
-                    android:text="@string/route_undo"
+                    android:text="@string/click_move_hint_empty"
+                    android:textColor="@color/m3_on_surface_variant"
                     android:textSize="12sp" />
 
-                <Button
-                    android:id="@+id/click_move_clear"
-                    android:layout_width="0dp"
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:minWidth="0dp"
-                    android:paddingStart="2dp"
-                    android:paddingEnd="2dp"
-                    android:text="@string/route_clear"
-                    android:textSize="12sp" />
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    tools:ignore="NestedWeights">
 
-                <Button
-                    android:id="@+id/click_move_go"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1.5"
-                    android:minWidth="0dp"
-                    android:paddingStart="2dp"
-                    android:paddingEnd="2dp"
-                    android:text="@string/click_move_go"
-                    android:textSize="12sp" />
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/click_move_undo"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:fontFamily="sans-serif-medium"
+                        android:minHeight="48dp"
+                        android:minWidth="0dp"
+                        android:paddingEnd="4dp"
+                        android:paddingStart="4dp"
+                        android:text="@string/route_undo"
+                        android:textColor="@color/m3_on_secondary_container"
+                        android:textSize="14sp"
+                        app:backgroundTint="@color/m3_secondary_container"
+                        app:cornerRadius="12dp"
+                        app:icon="@drawable/ic_left"
+                        app:iconGravity="textStart"
+                        app:iconPadding="6dp"
+                        app:iconSize="16dp"
+                        app:iconTint="@color/m3_on_secondary_container"
+                        app:strokeWidth="0dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/click_move_clear"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:fontFamily="sans-serif-medium"
+                        android:minHeight="48dp"
+                        android:minWidth="0dp"
+                        android:paddingEnd="4dp"
+                        android:paddingStart="4dp"
+                        android:text="@string/route_clear"
+                        android:textColor="@color/m3_on_secondary_container"
+                        android:textSize="14sp"
+                        app:backgroundTint="@color/m3_secondary_container"
+                        app:cornerRadius="12dp"
+                        app:icon="@drawable/ic_delete"
+                        app:iconGravity="textStart"
+                        app:iconPadding="6dp"
+                        app:iconSize="16dp"
+                        app:iconTint="@color/m3_on_secondary_container"
+                        app:strokeWidth="0dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/click_move_go"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1.6"
+                        android:fontFamily="sans-serif-medium"
+                        android:minHeight="48dp"
+                        android:minWidth="0dp"
+                        android:paddingEnd="4dp"
+                        android:paddingStart="4dp"
+                        android:text="@string/click_move_go"
+                        android:textColor="@color/white"
+                        android:textSize="14sp"
+                        app:backgroundTint="@color/colorPrimary"
+                        app:cornerRadius="12dp"
+                        app:icon="@drawable/ic_move"
+                        app:iconGravity="textStart"
+                        app:iconPadding="6dp"
+                        app:iconSize="16dp"
+                        app:iconTint="@color/white"
+                        app:strokeWidth="0dp" />
+                </LinearLayout>
             </LinearLayout>
-        </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
 
     </FrameLayout>
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

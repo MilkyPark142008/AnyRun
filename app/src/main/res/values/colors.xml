@@ -10,6 +10,12 @@
     <color name="m3_secondary_container">#ffcceee8</color>
     <color name="m3_on_secondary_container">#ff00201b</color>
 
+    <!-- 主界面浮动卡片与操作条用的 M3 表面色。
+         AppTheme 只有浅色变体（Theme.Material3.Light），所以直接固定取值，
+         不依赖 colorSurfaceContainer* 这类 material 1.9+ 才有的主题属性。 -->
+    <color name="m3_surface">#fffbfe</color>
+    <color name="m3_on_surface_variant">#ff44474f</color>
+
     <color name="white">#ffffff</color> <!-- 白色 -->
     <color name="ivory">#fffff0</color> <!-- 象牙色 -->
     <color name="lightyellow">#ffffe0</color> <!-- 亮黄色 -->

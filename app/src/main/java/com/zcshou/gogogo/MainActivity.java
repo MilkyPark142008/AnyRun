@@ -37,7 +37,6 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.ImageView;
-import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
@@ -66,6 +65,7 @@ import org.osmdroid.views.overlay.Polyline;
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider;
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay;
 
+import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.navigation.NavigationView;
@@ -187,27 +187,35 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     /** 新路点使用的状态（步行 / 跑步 / 骑行），速度取“设置”里对应的值 */
     private ScriptWaypoint.Mode mRouteMode = ScriptWaypoint.Mode.WALK;
     private FloatingActionButton mButtonRoute;
-    private LinearLayout mRouteBar;
+    // route_bar / click_move_bar 的根节点是 MaterialCardView（卡片化），
+    // 字段声明成 View 而不是 LinearLayout：findViewById<T> 会插入 checkcast，
+    // 类型对不上会直接 ClassCastException。两者实际只调用 setVisibility。
+    private View mRouteBar;
     private TextView mRouteHint;
     private Spinner mRouteModeSpinner;
-    private Button mRouteGoButton;
+    private MaterialButton mRouteGoButton;
     /** 路线连线：点地图加路点时实时重画 */
     private Polyline mRouteLine;
     private final List<Marker> mRouteMarkers = new ArrayList<>();
     /** 地图点击派发器：始终保持在图层最上面，保证点地图不会被路线图钉 / 连线吃掉 */
     private MapEventsOverlay mMapEventsOverlay;
     /*============================== 点击移动（多目标 + 行进轨迹） ==============================*/
-    /** 点击移动的目标点队列（WGS-84，与 ServiceGo / ScriptPlayer 的坐标语义一致） */
+    /**
+     * 点击移动的待走目标队列（WGS-84）。
+     *
+     * <p>队列里<b>只有还没走到的点</b>：走到一个就从队头删掉（图钉与连线随之消失），
+     * 所以“下一个要下发的目标”永远是 {@code get(0)}，不需要额外的下标。
+     * 队头即当前正在走向的目标，队尾是最后追加的。</p>
+     */
     private final List<ScriptWaypoint> mClickMovePoints = new ArrayList<>();
-    /** 已经走到的目标点下标（下一个要下发的目标就是它） */
-    private int mClickMoveIndex = 0;
     /** 从上一个目标到当前位置的连线（只有起点时才显示，形成完整的行进轨迹） */
     private Polyline mClickMoveLine;
     private final List<Marker> mClickMoveMarkers = new ArrayList<>();
-    /** 点击移动的操作条：撤回 / 清空 / 开始行走 */
-    private LinearLayout mClickMoveBar;
+    /** 点击移动的操作条：撤回 / 清空 / 开始行走（根节点同为 MaterialCardView，见 mRouteBar） */
+    private View mClickMoveBar;
     private TextView mClickMoveHint;
-    private Button mClickMoveGoButton;
+    /** 主操作按钮，用 MaterialButton 才能随状态切换图标（开始 ↔ 停止） */
+    private MaterialButton mClickMoveGoButton;
     /** 点击移动是否正在行进（由服务端到达回调驱动） */
     private volatile boolean mClickMoveRunning;
     /*============================== 历史记录 相关 ==============================*/
@@ -216,9 +224,12 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     /*============================== SearchView 相关 ==============================*/
     private SearchView searchView;
     private ListView mSearchList;
-    private LinearLayout mSearchLayout;
+    // 这两个下拉层在 main_content.xml 里也做成了 MaterialCardView；
+    // 注意 activity_history.xml 里还有一个同名的 search_linear 且仍是 LinearLayout，
+    // 那是 HistoryActivity 自己的布局，两者按各自 layout 解析，互不影响。
+    private View mSearchLayout;
     private ListView mSearchHistoryList;
-    private LinearLayout mHistoryLayout;
+    private View mHistoryLayout;
     private MenuItem searchItem;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -1463,7 +1474,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
      *
      * <p>路线选点和点击移动的画法完全一样，只差数据源、图层对象、标题文案和
      * 画完之后要刷新哪条操作条，所以这四样参数化，避免两份一模一样的循环
-     * 日后改了一处忘了另一处（例如以后要给已走过的点换图标）。</p>
+     * 日后改了一处忘了另一处（例如以后要给“队头那个正在走向的点”换个图标）。</p>
      *
      * @param points    路点（WGS-84）
      * @param markers   这组路点当前持有的图钉，会先全部摘掉再按 points 重建
@@ -1522,7 +1533,11 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
 
         if (mRouteGoButton != null) {
-            mRouteGoButton.setText(isMapRoutePlaying() ? R.string.route_stop : R.string.route_go);
+            boolean playing = isMapRoutePlaying();
+            // 图标跟着文案一起切：开始 = 移动箭头，停止 = 叉。
+            // 只在 XML 里写死一个图标的话，文案变成“停止移动”时图标还指着移动，会误导
+            mRouteGoButton.setText(playing ? R.string.route_stop : R.string.route_go);
+            mRouteGoButton.setIconResource(playing ? R.drawable.ic_close : R.drawable.ic_move);
         }
     }
 
@@ -1957,15 +1972,9 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         if (mClickMoveGoButton != null) {
             mClickMoveGoButton.setOnClickListener(v -> {
                 if (mClickMoveRunning) {
-                    // 停止行走：取消还没走到的目标（保留已走轨迹），按钮变回“开始行走”
-                    mClickMoveRunning = false;
-                    if (mServiceBinder != null) {
-                        try {
-                            mServiceBinder.clearClickTargets();
-                        } catch (Exception e) {
-                            XLog.e("ERROR: clearClickTargets", e);
-                        }
-                    }
+                    // 停止行走：让服务端放弃当前这一段。目标点仍留在队列里，
+                    // 之后点“开始行走”会从队头接着走
+                    cancelServiceClickTarget();
                     updateClickMoveUi();
                     GoUtils.DisplayToast(this, getResources().getString(R.string.click_move_stop));
                 } else if (mClickMovePoints.isEmpty()) {
@@ -2037,26 +2046,25 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     }
 
     /**
-     * 把“下一个还没走到的目标”下发给服务端。
+     * 把队头目标下发给服务端。
      *
-     * <p>{@link #mClickMoveIndex} 就是下一个待下发的目标下标（每到达一个由
-     * {@link #onServiceClickArrived} 推进），所以这里直接取它，不再需要额外的
-     * “已到达”标记。服务端到达后会回调，那时再把下一个发下去。
-     * 这样即使用户在行走途中继续点地图，也只是往队列尾部追加，不会打断当前这一段。</p>
+     * <p>队列里只存待走目标，所以队头（{@code get(0)}）就是下一个要走的点：
+     * 走到后由 {@link #onServiceClickArrived} 从队头删掉，再回到这里发下一个。
+     * 这样即使用户在行走途中继续点地图，也只是往队尾追加，不会打断当前这一段。</p>
      */
     private void dispatchNextClickTarget() {
         if (mServiceBinder == null) {
             return;
         }
 
-        if (mClickMoveIndex >= mClickMovePoints.size()) {
+        if (mClickMovePoints.isEmpty()) {
             // 没有下一个目标了：行进结束
             mClickMoveRunning = false;
             updateClickMoveUi();
             return;
         }
 
-        ScriptWaypoint target = mClickMovePoints.get(mClickMoveIndex);
+        ScriptWaypoint target = mClickMovePoints.get(0);
         try {
             if (mServiceBinder.appendClickTarget(target.lng, target.lat)) {
                 mClickMoveRunning = true;
@@ -2072,62 +2080,35 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         updateClickMoveUi();
     }
 
-    /** 服务端到达一个目标：推进下标，接着下发下一个（没有就收工） */
+    /** 服务端到达队头目标：把它删掉（走过的不再显示），再接着走下一个（没有就收工） */
     private void onServiceClickArrived() {
         runOnUiThread(() -> {
-            if (mClickMoveIndex < mClickMovePoints.size()) {
-                mClickMoveIndex++;
+            if (!mClickMovePoints.isEmpty()) {
+                mClickMovePoints.remove(0);
             }
 
-            if (mClickMoveIndex >= mClickMovePoints.size()) {
+            if (mClickMovePoints.isEmpty()) {
+                // 走完了：队列空了，行进结束。先改状态再重画，按钮才能正确显示“开始行走”
                 mClickMoveRunning = false;
                 redrawClickMove();
-                updateClickMoveUi();
                 GoUtils.DisplayToast(MainActivity.this,
                         getResources().getString(R.string.click_move_finished));
                 return;
             }
 
+            // 还有下一个：先把已走过的点从地图上摘掉，再把新的队头发下去
+            redrawClickMove();
             dispatchNextClickTarget();
         });
     }
 
-    /** 撤回最后一个还没走到的目标点（已经走过的点不回退，避免位置倒着走） */
-    private void undoClickMovePoint() {
-        if (mClickMovePoints.isEmpty()) {
-            GoUtils.DisplayToast(this, getResources().getString(R.string.click_move_empty));
-            return;
-        }
-
-        if (mClickMovePoints.size() <= mClickMoveIndex) {
-            // 所有点都走完了，撤回等同于清空
-            clearClickMovePoints();
-            return;
-        }
-
-        mClickMovePoints.remove(mClickMovePoints.size() - 1);
-
-        // 删掉的正好是“服务端正在走向”的那个目标：把服务端的目标一并撤掉，
-        // 否则位置会继续朝着一个已经不存在的点走
-        if (mClickMoveIndex >= mClickMovePoints.size() && mClickMoveRunning) {
-            mClickMoveRunning = false;
-            if (mServiceBinder != null) {
-                try {
-                    mServiceBinder.clearClickTargets();
-                } catch (Exception e) {
-                    XLog.e("ERROR: clearClickTargets", e);
-                }
-            }
-        }
-
-        redrawClickMove();
-        updateClickMoveUi();
-    }
-
-    /** 清空目标点与轨迹（正在走的目标也一并取消） */
-    private void clearClickMovePoints() {
-        mClickMovePoints.clear();
-        mClickMoveIndex = 0;
+    /**
+     * 让服务端放弃当前目标，并把本地运行标记复位。
+     *
+     * <p>撤回、清空、停止行走三处都要做同一件事，统一走这里，
+     * 免得哪处漏了 {@code clearClickTargets()}，位置就继续朝着已删除的点走。</p>
+     */
+    private void cancelServiceClickTarget() {
         mClickMoveRunning = false;
 
         if (mServiceBinder != null) {
@@ -2137,7 +2118,32 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 XLog.e("ERROR: clearClickTargets", e);
             }
         }
+    }
 
+    /** 撤回最后一个还没走到的目标（走过的点已随到达被删掉，这里只处理待走队列） */
+    private void undoClickMovePoint() {
+        if (mClickMovePoints.isEmpty()) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.click_move_empty));
+            return;
+        }
+
+        mClickMovePoints.remove(mClickMovePoints.size() - 1);
+
+        // 只有“队里就剩这一个”时，删的才是服务端正在走向的队头，
+        // 此时必须连服务端的目标一起撤掉，否则位置会继续朝着已删除的点走
+        if (mClickMovePoints.isEmpty() && mClickMoveRunning) {
+            cancelServiceClickTarget();
+        }
+
+        redrawClickMove();
+        // 显式刷新：redrawPoints 在地图已销毁时会提前返回，不能指望它替我们刷新按钮
+        updateClickMoveUi();
+    }
+
+    /** 清空目标点与轨迹（正在走向的目标也一并取消） */
+    private void clearClickMovePoints() {
+        mClickMovePoints.clear();
+        cancelServiceClickTarget();
         redrawClickMove();
         updateClickMoveUi();
     }
@@ -2163,8 +2169,12 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
 
         if (mClickMoveGoButton != null) {
-            mClickMoveGoButton.setText(mClickMoveRunning
+            // 同 updateRouteUi：图标与文案一起在“开始 / 停止”之间切换
+            boolean running = mClickMoveRunning;
+            mClickMoveGoButton.setText(running
                     ? R.string.click_move_stop : R.string.click_move_go);
+            mClickMoveGoButton.setIconResource(running
+                    ? R.drawable.ic_close : R.drawable.ic_move);
         }
     }
 
