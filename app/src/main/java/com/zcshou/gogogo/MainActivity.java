@@ -281,6 +281,15 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 syncStateWithService();
                 // 每次连上都把当前的“点击移动 ⇄ 摇杆移动”开关状态推给服务端
                 applyClickMoveMode();
+                // 重新绑定（切应用 / 切页面回来）时把最后一次真实定位补报一次：
+                // 服务端在脚本接管期间只记录、不覆盖，所以不会把脚本位置拉回真实位置
+                if (mCurrentLat != 0 || mCurrentLon != 0) {
+                    try {
+                        mServiceBinder.onRealLocation(mCurrentLon, mCurrentLat);
+                    } catch (Exception e) {
+                        XLog.e("ERROR: onRealLocation on connect", e);
+                    }
+                }
                 updateScriptButton();
             }
 
@@ -776,12 +785,27 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                     mCurrentLat = location.getLatitude();
                     mCurrentLon = location.getLongitude();
 
+                    // 把真实定位交给服务端：脚本 / 点击移动正在接管位置时它只记录不覆盖。
+                    // 以前这里（以及服务端的真实定位回调）会直接写当前位置，
+                    // 切一次应用就把模拟坐标拉回手机所在地，表现为“脚本失灵 + 回到真实位置”。
+                    if (mServiceBinder != null) {
+                        try {
+                            mServiceBinder.onRealLocation(mCurrentLon, mCurrentLat);
+                        } catch (Exception e) {
+                            XLog.e("ERROR: onRealLocation", e);
+                        }
+                    }
+
                     if (isFirstLoc) {
                         isFirstLoc = false;
                         // 内部依旧保存 BD-09 坐标
                         mMarkLatLngMap = wgs84ToBd09(mCurrentLon, mCurrentLat);
                         mMapView.getController().setZoom(18.0);
-                        mMapView.getController().animateTo(new GeoPoint(mCurrentLat, mCurrentLon));
+                        // 脚本正在接管位置时不要抢镜头（否则切一次应用，地图就飞回真实位置，
+                        // 看起来和“模拟位置回到正确位置”一模一样）
+                        if (!isScriptPlaying()) {
+                            mMapView.getController().animateTo(new GeoPoint(mCurrentLat, mCurrentLon));
+                        }
 
                         XLog.i("First WGS84 LatLng: " + mCurrentLat + "," + mCurrentLon);
                     }
@@ -1583,9 +1607,12 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
      * 校验服务端确实在播放指定脚本；没在播就用 binder 兜底启动一次。
      *
      * <p>“点开始不动”的兜底：不管 onStartCommand 有没有送到，只要服务连上了，
-     * 最终一定会真正进入播放状态。这里不再判断“是否已在播”——停止 → 摇杆 → 再开始的
-     * 时序里服务端状态可能残留，误判“已在播”会直接跳过启动；重复启动是幂等的。
-     * 启动失败（脚本数据异常等）给明确提示，不再静默。</p>
+     * 最终一定会真正进入播放状态。启动失败（脚本数据异常等）给明确提示，不再静默。</p>
+     *
+     * <p>唯一例外是“服务端确实正在播这条脚本”：这时重复启动会让播放器重新走一遍
+     * {@code findAnchor}，用当前模拟位置把轨迹重新锚定一次，位置会莫名跳一下。
+     * 真正需要重启的场景是“停止 → 摇杆 → 再开始”，那时服务端已经不是播放状态，
+     * 所以只按 {@code isScriptPlaying()} 判断即可，不会漏掉重启。</p>
      */
     private void ensureScriptPlaying(String scriptId) {
         if (mServiceBinder == null || TextUtils.isEmpty(scriptId)) {
@@ -1593,6 +1620,14 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
 
         try {
+            // 已经在播就不要再启动：每次 startScript 都会走一遍 findAnchor，
+            // 用“当前模拟位置”重新对齐轨迹。切应用 / 切页面回来的兜底调用
+            // 如果盲目重启，位置会被重新锚定一次，表现为脚本“走着走着跳一下 / 失灵”
+            if (mServiceBinder.isScriptPlaying()) {
+                mRunningScriptId = scriptId;
+                return;
+            }
+
             boolean ok = mServiceBinder.startScript(scriptId);
             if (ok) {
                 mRunningScriptId = scriptId;

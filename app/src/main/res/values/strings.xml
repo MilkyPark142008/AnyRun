@@ -147,8 +147,8 @@
     <string name="zoom_out">缩小</string>
     <string name="input_position_hint">经度 纬度，例如：116.397 39.908</string>
     <string name="input_position_tips">经度、纬度分开填写；也可以粘贴“经度,纬度”整串坐标，自动分填到两格。</string>
-    <string name="input_position_lng_hint">经度，例如 116.397</string>
-    <string name="input_position_lat_hint">纬度，例如 39.908</string>
+    <string name="input_position_lng_hint">经度</string>
+    <string name="input_position_lat_hint">纬度</string>
     <string name="input_position_clip_invalid">剪贴板里没有可识别的经纬度</string>
     <string name="coord_range_error">经度需在 -180 ~ 180，纬度需在 -90 ~ 90</string>
     <string name="input_position_paste">粘贴</string>

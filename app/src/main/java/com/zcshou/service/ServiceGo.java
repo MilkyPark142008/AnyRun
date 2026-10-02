@@ -53,6 +53,19 @@ public class ServiceGo extends Service {
     private volatile double mCurAlt = DEFAULT_ALT;
     private volatile float mCurBea = DEFAULT_BEA;
     private volatile double mSpeed = 1.2;        /* 默认的速度，单位 m/s */
+    /**
+     * 手机真实定位（WGS-84），与模拟位置彻底分开存放。
+     *
+     * <p>以前真实定位和脚本位置共用 mCurLat / mCurLng：脚本正在推位置时，
+     * 只要主界面（或系统）回调一次真实定位，模拟坐标就被改回手机所在地，
+     * 表现为“切一次应用脚本就失灵、位置回到真实位置”。现在真实定位只写这里，
+     * 只有脚本 / 点击移动都不在接管位置时，才允许它同步到 mCurLat / mCurLng。</p>
+     */
+    private volatile double mRealLng = DEFAULT_LNG;
+    private volatile double mRealLat = DEFAULT_LAT;
+    private volatile boolean mHasRealLocation = false;
+    /** 通知栏 / 主界面最近一次请求的“展示用”真实位置，用于恢复时避免把脚本拽走 */
+    private volatile boolean mScriptOwnsPosition = false;
     private static final int HANDLER_MSG_ID = 0;
     private static final String SERVICE_GO_HANDLER_NAME = "ServiceGoLocation";
     /* 服务被系统重新拉起（intent 为 null）时，用这里保存的上次位置恢复，避免拿不到位置 */
@@ -565,6 +578,9 @@ public class ServiceGo extends Service {
             public synchronized void onScriptFinish(ScriptRoute route) {
                 mScriptState = SCRIPT_STATE_FINISHED;
                 XLog.i("SERVICEGO: script finished - " + route.name);
+                // 脚本跑完不再接管坐标，交还给真实定位（没有真实定位时保持原地）
+                mScriptOwnsPosition = false;
+                releasePositionToReal();
                 // 跑完 = 本次脚本到此结束：立刻清掉“正在播放”的持久状态与重启恢复标记。
                 // 否则界面会一直按“播放中”处理——路线条显示“停止”、要先停一次才能再模拟、
                 // 点击移动被拒、单点传送被要求确认，表现为“脚本结束后模拟位置不能立刻实现”
@@ -621,6 +637,51 @@ public class ServiceGo extends Service {
         return mScriptState == SCRIPT_STATE_PLAYING
                 && mScriptPlayer != null
                 && mScriptPlayer.isPlaying();
+    }
+
+    /**
+     * 当前是否由“模拟位置”接管坐标（脚本播放或点击移动）。
+     *
+     * <p>真实定位回调只能在这两个功能都没接管时才更新当前坐标。</p>
+     */
+    private boolean isMockDrivingPosition() {
+        return isScriptDrivingPosition() || mClickMoveEnabled && mHasClickTarget;
+    }
+
+    /**
+     * 接收一次真实定位。
+     *
+     * <p>无论什么时候都只把它存进 mRealLng / mRealLat；只有没有任何模拟位置功能
+     * 在接管坐标时才同步到 mCurLat / mCurLng。这样切换应用导致系统补发一次真实
+     * 定位时，脚本正在走的位置不会被“拉回手机所在地”。</p>
+     *
+     * @return 是否把当前位置也更新了
+     */
+    public boolean applyRealLocation(double lng, double lat) {
+        if (lng == 0 && lat == 0) {
+            return false;
+        }
+
+        mRealLng = lng;
+        mRealLat = lat;
+        mHasRealLocation = true;
+
+        if (isMockDrivingPosition()) {
+            XLog.i("SERVICEGO: real location ignored while mock is driving");
+            return false;
+        }
+
+        mCurLng = lng;
+        mCurLat = lat;
+        return true;
+    }
+
+    /** 脚本 / 点击移动结束后，把坐标交还给真实定位（没有真实定位时保持原地） */
+    private void releasePositionToReal() {
+        if (mHasRealLocation) {
+            mCurLng = mRealLng;
+            mCurLat = mRealLat;
+        }
     }
 
     /**
@@ -681,6 +742,9 @@ public class ServiceGo extends Service {
                 .apply();
 
         mScriptPlayer.start(route, mCurLng, mCurLat);
+        // 脚本从现在起接管坐标：此后真实定位回调只更新 mRealLng / mRealLat，
+        // 不再允许覆盖模拟位置（否则切一次应用就被拉回真实位置）
+        mScriptOwnsPosition = true;
 
         // 脚本起点也记一份，服务重启后能回到轨迹附近
         saveLastPosition();
@@ -695,6 +759,9 @@ public class ServiceGo extends Service {
         boolean hadScript = mScriptRoute != null || mScriptState != SCRIPT_STATE_IDLE;
         mScriptRoute = null;
         mScriptState = SCRIPT_STATE_IDLE;
+        // 脚本不再接管坐标：真实定位可以重新同步（有真实定位就用它，没有就留在原地）
+        mScriptOwnsPosition = false;
+        releasePositionToReal();
 
         if (mScriptStore != null) {
             mScriptStore.setRunningScriptId(null);
@@ -711,6 +778,13 @@ public class ServiceGo extends Service {
 
     private void saveLastPosition() {
         try {
+            // 注：脚本运行期间这里不写盘。保存的坐标是“服务被系统重启后恢复用”的，
+            // 若每 tick 都把脚本行进中的坐标写进去，服务重启后会从脚本半途接上，
+            // 反而让“重启恢复”变得不可预期；脚本起点在 startScript 里已经存过一次。
+            if (isScriptDrivingPosition()) {
+                return;
+            }
+
             PreferenceManager.getDefaultSharedPreferences(this).edit()
                     .putString(KEY_LAST_LNG, Double.toString(mCurLng))
                     .putString(KEY_LAST_LAT, Double.toString(mCurLat))
@@ -973,6 +1047,21 @@ public class ServiceGo extends Service {
 
         public int getScriptState() {
             return mScriptState;
+        }
+
+        /** 脚本是否真正在接管位置（用于界面避免重复 startScript 重置轨迹） */
+        public boolean isScriptPlaying() {
+            return isScriptDrivingPosition();
+        }
+
+        /**
+         * 上报一次真实定位（主界面 / 摇杆从系统定位拿到坐标时调用）。
+         *
+         * <p>服务内部会判断当前是否由脚本或点击移动接管：接管期间只记录不覆盖，
+         * 避免切换应用时真实定位把模拟位置拉回去。</p>
+         */
+        public void onRealLocation(double lng, double lat) {
+            applyRealLocation(lng, lat);
         }
 
         /** 当前正在播放的脚本 id；没在播放（含已跑完）时返回 null */
