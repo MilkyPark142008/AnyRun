@@ -1,6 +1,3 @@
-<p align="center">
-<img src="./docs/images/LOGO.png" height="80"/>
-</p>
 
 <div align="center">
 
@@ -25,10 +22,7 @@
 ## 警告 有任何问题请直接提交issue 或是删除 或是修改 禁止商用行为
 
 ## 简介
-&emsp;&emsp;影梭是一个基于 Android 调试 API + 百度地图及定位 SDK 实现的安卓定位修改工具，并且同时实现了一个可以自由控制移动的摇杆。使用影梭，不需要 ROOT 权限就可以随意修改自己的当前位置以及模拟移动。
-
-1. 源码仓库：[Github](https://github.com/ZCShou/GoGoGo)（推荐）、[Gitee](https://gitee.com/itexp/gogogo)（镜像）
-2. 下载地址：[Github](https://github.com/ZCShou/GoGoGo/releases)（推荐）、[Gitee](https://gitee.com/itexp/gogogo/releases)（镜像）
+&emsp;&emsp;影梭是一个基于 Android 调试 API实现的安卓定位修改工具，并且同时实现了一个可以自由控制移动的摇杆。使用影梭，不需要 ROOT 权限就可以随意修改自己的当前位置以及模拟移动。
 
 
 ## 个人Fork原因及背景
