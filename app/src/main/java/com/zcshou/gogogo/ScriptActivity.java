@@ -593,8 +593,19 @@ public class ScriptActivity extends BaseActivity {
         }
 
         try {
-            // 不判断“是否已在播”：状态可能残留（PLAYING 但播放器没在跑），误判会跳过启动。
-            // 重复启动是幂等的；失败给明确提示，不再静默
+            // 服务端“真的”在播同一条脚本就跳过：重复 startScript 会让播放器重新走一遍
+            // findAnchor，用当前模拟位置把轨迹重新锚定一次，位置会莫名跳一下。
+            // 以前这里无条件重启，是“先启动模拟位置、再起用脚本”表现异常的来源之一。
+            //
+            // 双条件缺一不可：isScriptPlaying() 是状态 + 播放器双确认（防状态残留误判），
+            // id 相同才叫“同一条”（换脚本必须能立刻切过去）。
+            boolean playingSame = mServiceBinder.isScriptPlaying()
+                    && scriptId.equals(mServiceBinder.getRunningScriptId());
+            if (playingSame) {
+                mPlayingScriptId = scriptId;
+                return;
+            }
+
             boolean ok = mServiceBinder.startScript(scriptId);
             if (ok) {
                 mPlayingScriptId = scriptId;

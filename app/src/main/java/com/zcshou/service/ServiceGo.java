@@ -21,7 +21,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
-import android.os.Looper;
 import android.os.Message;
 import android.os.Process;
 import android.os.SystemClock;
@@ -53,19 +52,11 @@ public class ServiceGo extends Service {
     private volatile double mCurAlt = DEFAULT_ALT;
     private volatile float mCurBea = DEFAULT_BEA;
     private volatile double mSpeed = 1.2;        /* 默认的速度，单位 m/s */
-    /**
-     * 手机真实定位（WGS-84），与模拟位置彻底分开存放。
-     *
-     * <p>以前真实定位和脚本位置共用 mCurLat / mCurLng：脚本正在推位置时，
-     * 只要主界面（或系统）回调一次真实定位，模拟坐标就被改回手机所在地，
-     * 表现为“切一次应用脚本就失灵、位置回到真实位置”。现在真实定位只写这里，
-     * 只有脚本 / 点击移动都不在接管位置时，才允许它同步到 mCurLat / mCurLng。</p>
+    /*
+     * 真实定位与模拟位置是两条独立的链路：真实定位只经由 applyRealLocation() 进来，
+     * 且只在“没有任何模拟位置在接管”时才允许写入 mCurLat / mCurLng。
+     * 以前两者共用这两个字段，导致“切一次应用脚本就失灵、位置回到真实位置”。
      */
-    private volatile double mRealLng = DEFAULT_LNG;
-    private volatile double mRealLat = DEFAULT_LAT;
-    private volatile boolean mHasRealLocation = false;
-    /** 通知栏 / 主界面最近一次请求的“展示用”真实位置，用于恢复时避免把脚本拽走 */
-    private volatile boolean mScriptOwnsPosition = false;
     private static final int HANDLER_MSG_ID = 0;
     private static final String SERVICE_GO_HANDLER_NAME = "ServiceGoLocation";
     /* 服务被系统重新拉起（intent 为 null）时，用这里保存的上次位置恢复，避免拿不到位置 */
@@ -96,6 +87,7 @@ public class ServiceGo extends Service {
     private ScriptRoute mScriptRoute;
     private ScriptStore mScriptStore;
     private ScriptListener mScriptListener;
+    private ClickMoveListener mClickMoveListener;
 
     /* 点击移动：主界面左下角开关控制，点地图朝目标点按“行走方式”持续走 */
     /** true = 点击移动生效（false = 摇杆移动）；开启时摇杆方向输入暂停 */
@@ -106,8 +98,6 @@ public class ServiceGo extends Service {
     private volatile double mClickTargetLat;
     /** 上一次朝目标推进的时刻（毫秒），按真实间隔步进 */
     private long mLastClickStepMs;
-    /** 到达目标的提示要发到主线程 */
-    private final Handler mMainHandler = new Handler(Looper.getMainLooper());
 
     /** 脚本播放状态回调，供界面展示“第几个点 / 当前状态” */
     public interface ScriptListener {
@@ -116,6 +106,18 @@ public class ServiceGo extends Service {
         void onScriptFinish(ScriptRoute route);
 
         void onScriptStopped();
+    }
+
+    /**
+     * 点击移动“到达一个目标”的回调。
+     *
+     * <p>目标点列表由主界面维护（可以连着点好几个），服务端只负责“走到下一个”，
+     * 到站后通过本回调通知界面，由界面决定是否继续下发后续目标、或者宣告走完。
+     * 回调在定位线程触发，实现方需要切主线程再碰界面。</p>
+     */
+    public interface ClickMoveListener {
+        /** 到达一个目标点（经纬度为 WGS-84），界面据此决定是否继续下发下一个 */
+        void onClickTargetArrived(double lng, double lat);
     }
 
     private final ServiceGoBinder mBinder = new ServiceGoBinder();
@@ -394,15 +396,22 @@ public class ServiceGo extends Service {
                     Thread.sleep(100);
 
                     if (!isStop) {
-                        // 点击移动先按“行走方式”的速度朝目标走一步，再统一注入本轮位置
-                        advanceClickTarget();
+                        // 顺序：先把位置推进到“本拍”，再注入。
+                        //
+                        // 以前点击移动排在注入前、脚本 onTick 排在注入后，
+                        // 结果脚本每轮注入的都是上一拍算出的坐标，恒定滞后一个 tick（约 100ms），
+                        // 而点击移动不滞后——两者表现不一致。现在统一“先推进、后注入”。
+                        //
+                        // 两者互斥：appendClickTarget 在脚本播放中会直接拒绝，
+                        // startScript 也会作废进行中的点击目标，所以用 else 表达这个互斥。
+                        if (isScriptDrivingPosition()) {
+                            mScriptPlayer.onTick();
+                        } else {
+                            advanceClickTarget();
+                        }
+
                         setLocationNetwork();
                         setLocationGPS();
-
-                        // 脚本模式：定时推进位置（内部会按“走 / 跑 / 骑”分段速度前进）
-                        if (mScriptPlayer != null && mScriptPlayer.isPlaying()) {
-                            mScriptPlayer.onTick();
-                        }
                     }
                 } catch (InterruptedException e) {
                     XLog.e("SERVICEGO: ERROR - handleMessage", e);
@@ -468,9 +477,26 @@ public class ServiceGo extends Service {
     }
 
     /**
-     * 点击移动：朝目标点按摇杆当前选择的行走方式（走 / 跑 / 骑的速度）持续前进。
+     * 点击移动当前使用的速度（米/秒）：跟随悬浮摇杆上的走 / 跑 / 骑选择。
      *
-     * <p>脚本播放时位置由脚本接管，这里让路；到达目标后停止并提示一次。</p>
+     * <p>悬浮窗创建失败时 mJoyStick 为空，这里回落到设置里的步行速度，
+     * 否则点击移动会直接不动。</p>
+     */
+    private double clickMoveSpeed() {
+        double speed = mJoyStick != null ? mJoyStick.getCurrentSpeed() : 0;
+        if (speed <= 0) {
+            speed = getModeSpeeds()[0];
+        }
+        return speed <= 0 ? 1.2D : speed;
+    }
+
+    /**
+     * 点击移动：沿线朝当前目标持续前进；到站后由界面接上下一个目标。
+     *
+     * <p>目标由主界面维护（可以连着点好几个），这里只负责“走到它”，
+     * 到达后回调 {@link ClickMoveListener#onClickTargetArrived}，
+     * 由界面决定把下一个点发下来还是宣告走完。这样即使用户在行走途中
+     * 继续点地图，也只是往队列尾部追加，不会打断当前这一段。</p>
      */
     private void advanceClickTarget() {
         if (!mClickMoveEnabled || !mHasClickTarget) {
@@ -488,10 +514,7 @@ public class ServiceGo extends Service {
             return;
         }
 
-        double speed = mJoyStick != null ? mJoyStick.getCurrentSpeed() : 1.2D;
-        if (speed <= 0) {
-            speed = 1.2D;
-        }
+        double speed = clickMoveSpeed();
         double step = speed * dt;
 
         double distance = ScriptPlayer.distanceMeters(mCurLng, mCurLat, mClickTargetLng, mClickTargetLat);
@@ -499,12 +522,12 @@ public class ServiceGo extends Service {
         mCurBea = bearing;
         mSpeed = speed;
 
-        if (distance <= Math.max(step, 0.05D)) {
+        boolean arrived = distance <= Math.max(step, 0.05D);
+        if (arrived) {
             // 到达：落点精确对齐目标
             mCurLng = mClickTargetLng;
             mCurLat = mClickTargetLat;
             mHasClickTarget = false;
-            notifyClickArrived();
         } else {
             // 一步的位移很小，平面近似的误差可以忽略
             double ratio = step / distance;
@@ -519,24 +542,29 @@ public class ServiceGo extends Service {
                 XLog.e("SERVICEGO: ERROR - click setCurrentPosition", e);
             }
         }
+
+        // 到达一个目标：交给界面决定“接着走下一个”还是“走完了”
+        if (arrived) {
+            ClickMoveListener listener = mClickMoveListener;
+            if (listener != null) {
+                try {
+                    listener.onClickTargetArrived(mCurLng, mCurLat);
+                } catch (Exception e) {
+                    XLog.e("SERVICEGO: ERROR - onClickTargetArrived", e);
+                }
+            }
+        }
     }
 
-    /** 两点间方位角（0~360，正北为 0；避开 0 以免注入端被判定“没有朝向”） */
+    /**
+     * 两点间方位角（0~360，正北为 0）。
+     *
+     * <p>公式统一走 {@link ScriptParser#bearing(double, double, double, double)}，
+     * 这里只保留注入端特有的处理：避开恰好 0 的朝向（见 {@link #injectionBearing()}）。</p>
+     */
     private static float bearingBetween(double lng1, double lat1, double lng2, double lat2) {
-        double lat1r = Math.toRadians(lat1);
-        double lat2r = Math.toRadians(lat2);
-        double dLng = Math.toRadians(lng2 - lng1);
-
-        double y = Math.sin(dLng) * Math.cos(lat2r);
-        double x = Math.cos(lat1r) * Math.sin(lat2r) - Math.sin(lat1r) * Math.cos(lat2r) * Math.cos(dLng);
-        float bearing = (float) ((Math.toDegrees(Math.atan2(y, x)) + 360.0D) % 360.0D);
+        float bearing = (float) ScriptParser.bearing(lng1, lat1, lng2, lat2);
         return bearing == 0.0f ? 0.01f : bearing;
-    }
-
-    /** 到达提示（Toast 必须在有 Looper 的线程，这里发到主线程） */
-    private void notifyClickArrived() {
-        mMainHandler.post(() -> GoUtils.DisplayToast(ServiceGo.this,
-                getString(R.string.click_move_arrived)));
     }
 
     /*============================== 脚本模式 ==============================*/
@@ -581,12 +609,11 @@ public class ServiceGo extends Service {
             public synchronized void onScriptFinish(ScriptRoute route) {
                 mScriptState = SCRIPT_STATE_FINISHED;
                 XLog.i("SERVICEGO: script finished - " + route.name);
-                // 脚本跑完不再接管坐标，交还给真实定位（没有真实定位时保持原地）
-                mScriptOwnsPosition = false;
-                releasePositionToReal();
-                // 跑完 = 本次脚本到此结束：立刻清掉“正在播放”的持久状态与重启恢复标记。
-                // 否则界面会一直按“播放中”处理——路线条显示“停止”、要先停一次才能再模拟、
-                // 点击移动被拒、单点传送被要求确认，表现为“脚本结束后模拟位置不能立刻实现”
+                // 跑完只“不再推进”，坐标保持在终点：服务还活着，注入循环会继续维持这个位置
+                // （这里若交还真实定位，表现就是“脚本跑完位置突然跳回手机所在地”）。
+                // 同时立刻清掉“正在播放”的持久状态与重启恢复标记，否则界面会一直按“播放中”
+                // 处理——路线条显示“停止”、要先停一次才能再模拟、点击移动被拒、
+                // 单点传送被要求确认，表现为“脚本结束后模拟位置不能立刻实现”
                 try {
                     if (mScriptStore != null) {
                         mScriptStore.setRunningScriptId(null);
@@ -643,18 +670,17 @@ public class ServiceGo extends Service {
     }
 
     /**
-     * 当前是否由“模拟位置”接管坐标。
-     *
-     * <p>只要服务在跑（单点模拟 / 脚本 / 点击移动），真实定位就一律不许改写当前坐标，
-     * 只能记进 mRealLng / mRealLat。判定刻意做得宽松：</p>
+     * 当前是否由“模拟位置”接管坐标。判定刻意做得宽松（宁可多拦，不可漏拦）：
      *
      * <ul>
-     *   <li>脚本：状态 + 播放器双确认，状态残留时不会误锁；</li>
-     *   <li>点击移动：开关看着很窄，但 mClickMoveEnabled 是 volatile，
-     *       与 Binder 线程之间没有内存屏障问题，这里再加上“服务已启动”的兜底；</li>
-     *   <li>单点模拟：没有任何“正在进行中”的标记，用 isStop 之外最简单的判据——
-     *       服务活着就归它管，这样切应用回来绝不会有真实定位插进来。</li>
+     *   <li>脚本：状态 + 播放器双确认，状态残留时不会误锁摇杆；</li>
+     *   <li>点击移动：目标还没走完就一直算接管；</li>
+     *   <li>单点模拟：没有“正在进行中”的标记，就用“服务还活着”兜底——
+     *       注入循环一直在跑，真实定位此时绝不能插进来。</li>
      * </ul>
+     *
+     * <p>只看前两条会漏掉单点模拟（表现：模拟位置刚启动就被真实定位拉回手机所在地），
+     * 所以必须带上 {@code !isStop} 这一层。</p>
      */
     private boolean isMockDrivingPosition() {
         if (isScriptDrivingPosition()) {
@@ -663,17 +689,19 @@ public class ServiceGo extends Service {
         if (mClickMoveEnabled && mHasClickTarget) {
             return true;
         }
-        // 服务活着就认为模拟位置在接管：mLocHandler 一直在循环注入坐标，
-        // 此时真实定位只应作为“参考位置”保存，绝不能改写当前坐标
+        // 服务活着就认为模拟位置在接管：mLocHandler 一直在循环注入坐标
         return !isStop;
     }
 
     /**
-     * 接收一次真实定位。
+     * 接收一次真实定位（主界面 / 摇杆从系统定位拿到坐标时回调）。
      *
-     * <p>无论什么时候都只把它存进 mRealLng / mRealLat；只有没有任何模拟位置功能
-     * 在接管坐标时才同步到 mCurLat / mCurLng。这样切换应用导致系统补发一次真实
-     * 定位时，脚本正在走的位置不会被“拉回手机所在地”。</p>
+     * <p>模拟位置在接管时直接丢弃，不写坐标也不打日志——这是每秒都会来好几次的
+     * 正常路径，刷日志只会把有用信息淹掉。切换应用时系统会补发一次真实定位，
+     * 若这里直接覆盖，就会出现“切一次应用，模拟位置回到手机真实位置、脚本失灵”。</p>
+     *
+     * <p>反过来说，真的走到“没有模拟在接管却仍收到定位”这条分支才算异常，
+     * 这时才记一条日志，方便排查。</p>
      *
      * @return 是否把当前位置也更新了
      */
@@ -682,26 +710,15 @@ public class ServiceGo extends Service {
             return false;
         }
 
-        mRealLng = lng;
-        mRealLat = lat;
-        mHasRealLocation = true;
-
         if (isMockDrivingPosition()) {
-            XLog.i("SERVICEGO: real location ignored while mock is driving");
+            // 模拟位置在接管：丢弃真实定位（不写坐标）
             return false;
         }
 
+        XLog.i("SERVICEGO: mock is not driving, adopt real location " + lng + "," + lat);
         mCurLng = lng;
         mCurLat = lat;
         return true;
-    }
-
-    /** 脚本 / 点击移动结束后，把坐标交还给真实定位（没有真实定位时保持原地） */
-    private void releasePositionToReal() {
-        if (mHasRealLocation) {
-            mCurLng = mRealLng;
-            mCurLat = mRealLat;
-        }
     }
 
     /**
@@ -751,6 +768,10 @@ public class ServiceGo extends Service {
             initScriptPlayer();
         }
 
+        // 先把测试提供者 / 注入线程准备好，再启动脚本：
+        // 否则脚本在算坐标，但没人往系统里注入，表现就是“脚本不好用”
+        ensureMockEnvironment();
+
         mScriptRoute = route;
         mScriptState = SCRIPT_STATE_PLAYING;
         mScriptStore.setRunningScriptId(route.id);
@@ -762,9 +783,6 @@ public class ServiceGo extends Service {
                 .apply();
 
         mScriptPlayer.start(route, mCurLng, mCurLat);
-        // 脚本从现在起接管坐标：此后真实定位回调只更新 mRealLng / mRealLat，
-        // 不再允许覆盖模拟位置（否则切一次应用就被拉回真实位置）
-        mScriptOwnsPosition = true;
 
         // 脚本起点也记一份，服务重启后能回到轨迹附近
         saveLastPosition();
@@ -779,9 +797,9 @@ public class ServiceGo extends Service {
         boolean hadScript = mScriptRoute != null || mScriptState != SCRIPT_STATE_IDLE;
         mScriptRoute = null;
         mScriptState = SCRIPT_STATE_IDLE;
-        // 脚本不再接管坐标：真实定位可以重新同步（有真实定位就用它，没有就留在原地）
-        mScriptOwnsPosition = false;
-        releasePositionToReal();
+        // 当前坐标保持不变（与方法契约一致）：服务还活着，注入循环继续维持这个位置。
+        // 这里绝不能把坐标“交还”给真实定位，否则“停止脚本”会变成
+        // “位置跳回手机所在地”，那正是要修的现象
 
         if (mScriptStore != null) {
             mScriptStore.setRunningScriptId(null);
@@ -793,6 +811,42 @@ public class ServiceGo extends Service {
 
         if (hadScript && mScriptListener != null) {
             mScriptListener.onScriptStopped();
+        }
+    }
+
+    /**
+     * 脚本启动前的准备：确保测试提供者存在，并且后台注入线程正在跑。
+     *
+     * <p>“进入模拟位置之后再起用脚本就不好用”的最可能原因：单点模拟那条路径
+     * 结束时会 stopService / 解绑，服务一旦被系统收走，测试提供者和注入线程
+     * 就都没了；此时脚本即使被主界面兜底启动，注入端也不存在。
+     * 这里在真正 start 之前自检一次，缺什么补什么。</p>
+     */
+    private void ensureMockEnvironment() {
+        try {
+            // 必须最先复位：注入线程的 handleMessage 一进来就检查 isStop，
+            // 若这里放最后，新线程的第一条消息可能先看到 true，直接退出循环不再重排，
+            // 表现就是“脚本在算坐标，但坐标永远注入不进去”
+            isStop = false;
+
+            if (mLocManager == null) {
+                mLocManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            }
+
+            // 测试提供者可能被别的流程移除过（removeTestProvider 是先删后加），这里补建
+            addTestProviderGPS();
+            addTestProviderNetwork();
+
+            // 注入线程必须活着，否则脚本算出来的坐标没人往系统里写
+            if (mLocHandler == null || mLocHandlerThread == null || !mLocHandlerThread.isAlive()) {
+                XLog.i("SERVICEGO: location thread is gone, restart it for script");
+                initGoLocation();
+            } else {
+                mLocHandler.removeMessages(HANDLER_MSG_ID);
+                mLocHandler.sendEmptyMessage(HANDLER_MSG_ID);
+            }
+        } catch (Exception e) {
+            XLog.e("SERVICEGO: ERROR - ensureMockEnvironment", e);
         }
     }
 
@@ -1018,15 +1072,29 @@ public class ServiceGo extends Service {
             ServiceGo.this.setClickMoveMode(enabled);
         }
 
+        /** 注册点击移动“到达一个目标”的回调（定位线程触发） */
+        public void setClickMoveListener(ClickMoveListener listener) {
+            mClickMoveListener = listener;
+        }
+
+        public void clearClickMoveListener() {
+            mClickMoveListener = null;
+        }
+
         /**
-         * 点击移动：朝目标点按摇杆当前选择的行走方式持续前进。
+         * 追加一个行进目标：立刻朝它走，走到后回调界面继续下发下一个。
+         *
+         * <p>与脚本互斥：脚本真正播放中由脚本接管位置，这里直接拒绝。
+         * 判定用 {@link ServiceGo#isScriptDrivingPosition()}（状态 + 播放器双确认），
+         * 只看 mScriptState 会被“状态停在 PLAYING、播放器早停了”的残留挡掉，
+         * 表现为“点地图加目标没反应”。</p>
          *
          * @param lng 目标经度（WGS-84）
          * @param lat 目标纬度（WGS-84）
          * @return 未开启点击移动或脚本正在播放时返回 false
          */
-        public boolean setClickTarget(double lng, double lat) {
-            if (!mClickMoveEnabled || mScriptState == SCRIPT_STATE_PLAYING) {
+        public boolean appendClickTarget(double lng, double lat) {
+            if (!mClickMoveEnabled || isScriptDrivingPosition()) {
                 return false;
             }
 
@@ -1037,8 +1105,8 @@ public class ServiceGo extends Service {
             return true;
         }
 
-        /** 作废进行中的行走目标 */
-        public void cancelClickTarget() {
+        /** 清空所有还未到达的目标（撤回 / 清空 / 停止时用） */
+        public void clearClickTargets() {
             mHasClickTarget = false;
         }
 

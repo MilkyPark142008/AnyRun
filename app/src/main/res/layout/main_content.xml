@@ -196,5 +196,71 @@
             </LinearLayout>
         </LinearLayout>
 
+        <!--
+            点击移动操作条：点击移动模式下点地图即可连续添加目标点，
+            这条操作条负责撤回 / 清空 / 开始行走，交互与上面的路线选点保持一致。
+        -->
+        <LinearLayout
+            android:id="@+id/click_move_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:layout_marginStart="8dp"
+            android:layout_marginTop="?attr/actionBarSize"
+            android:layout_marginEnd="100dp"
+            android:background="#e6ffffff"
+            android:orientation="vertical"
+            android:padding="8dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/click_move_hint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/click_move_hint_empty"
+                android:textSize="12sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/click_move_undo"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:minWidth="0dp"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="2dp"
+                    android:text="@string/route_undo"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/click_move_clear"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:minWidth="0dp"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="2dp"
+                    android:text="@string/route_clear"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/click_move_go"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1.5"
+                    android:minWidth="0dp"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="2dp"
+                    android:text="@string/click_move_go"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+
     </FrameLayout>
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

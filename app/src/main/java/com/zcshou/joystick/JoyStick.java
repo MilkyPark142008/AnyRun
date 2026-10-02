@@ -105,51 +105,37 @@ public class JoyStick extends View {
 
     public JoyStick(Context context) {
         super(context);
-        this.mContext = context;
-
-        sharedPreferences = PreferenceManager.getDefaultSharedPreferences(mContext);
-
-        initWindowManager();
-
-        inflater = LayoutInflater.from(mContext);
-
-        if (inflater != null) {
-            initJoyStickView();
-
-            initJoyStickMapView();
-
-            initHistoryView();
-        }
+        mContext = context;
+        sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
+        inflater = LayoutInflater.from(context);
+        initUi();
     }
 
     public JoyStick(Context context, AttributeSet attrs, int defStyleAttr) {
         super(context, attrs, defStyleAttr);
-        this.mContext = context;
-
-        sharedPreferences = PreferenceManager.getDefaultSharedPreferences(mContext);
-
-        initWindowManager();
-
-        inflater = LayoutInflater.from(mContext);
-
-        if (inflater != null) {
-            initJoyStickView();
-
-            initJoyStickMapView();
-
-            initHistoryView();
-        }
+        mContext = context;
+        sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
+        inflater = LayoutInflater.from(context);
+        initUi();
     }
 
     public JoyStick(Context context, AttributeSet attrs) {
         super(context, attrs);
-        this.mContext = context;
+        mContext = context;
+        sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
+        inflater = LayoutInflater.from(context);
+        initUi();
+    }
 
-        sharedPreferences = PreferenceManager.getDefaultSharedPreferences(mContext);
-
+    /**
+     * 三个构造函数共用的初始化。
+     *
+     * <p>mContext / inflater / sharedPreferences 是 final 字段，只能在构造器里赋值，
+     * 所以那三行留在各个构造器中；剩下的“建窗口 → 建三个悬浮视图”完全相同，
+     * 抽到这里，以后改初始化顺序只改一处。</p>
+     */
+    private void initUi() {
         initWindowManager();
-
-        inflater = LayoutInflater.from(mContext);
 
         if (inflater != null) {
             initJoyStickView();

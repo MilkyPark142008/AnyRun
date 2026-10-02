@@ -41,8 +41,6 @@ public class ScriptPlayer {
     private int mIndex;
     /** 是否循环 */
     private boolean mLoop;
-    /** 循环模式下已经跑完的圈数，仅用于日志 */
-    private int mLap;
     /** 是否已经产生过有效位置（用于首次强制回调一次） */
     private boolean mHasPosition;
 
@@ -98,32 +96,15 @@ public class ScriptPlayer {
         return mPlaying && mRoute != null;
     }
 
-    public ScriptRoute getRoute() {
-        return mRoute;
-    }
-
+    /**
+     * 当前路段的移动状态（走 / 跑 / 骑）。
+     *
+     * <p>这是本类唯一对外暴露的“当前状态”读数，被 ServiceGo 的界面状态查询使用；
+     * 位置 / 速度 / 方向这些内部状态不提供 getter——它们只在本类内部参与插值计算，
+     * 暴露出去只会让人误以为可以外部改写，徒增维护成本。</p>
+     */
     public ScriptWaypoint.Mode getMode() {
         return mMode;
-    }
-
-    public double getSpeed() {
-        return mSpeed;
-    }
-
-    public double getBearing() {
-        return mBearing;
-    }
-
-    public double getLng() {
-        return mLng;
-    }
-
-    public double getLat() {
-        return mLat;
-    }
-
-    public int getLap() {
-        return mLap;
     }
 
     /**
@@ -141,7 +122,6 @@ public class ScriptPlayer {
 
         mRoute = route;
         mLoop = route.isLoop();
-        mLap = 0;
         mEndReached = false;
         mHasPosition = false;
         mOverrideMode = null;
@@ -333,7 +313,6 @@ public class ScriptPlayer {
                 double closingV1 = liveSpeed(first);
 
                 if (closing < MIN_STEP_METERS) {
-                    mLap++;
                     mIndex = 0;
                     mElapsedInSegment = remainingTime;
                     mBearing = points.size() > 1 ? ScriptParser.bearing(first, points.get(1)) : 0;
@@ -359,7 +338,6 @@ public class ScriptPlayer {
 
                 remainingTime -= closingTravel + closingWait;
                 mConsumedSeconds += closingTravel + closingWait;
-                mLap++;
                 mIndex = 0;
                 mElapsedInSegment = remainingTime;
                 mBearing = points.size() > 1 ? ScriptParser.bearing(first, points.get(1)) : 0;
@@ -419,11 +397,6 @@ public class ScriptPlayer {
         }
 
         return false;
-    }
-
-    /** 已跑完的整圈数（仅循环模式有意义） */
-    public int getLaps() {
-        return mLap;
     }
 
     /**

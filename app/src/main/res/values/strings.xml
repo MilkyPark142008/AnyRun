@@ -75,7 +75,6 @@
     <string name="setting_joystick_type">移动类型</string>
     <string name="move_mode_click">点击移动</string>
     <string name="move_mode_joystick">摇杆移动</string>
-    <string name="click_move_arrived">已到达点击位置</string>
     <string name="click_move_script_busy">正在播放脚本，点击移动已忽略</string>
     <string name="setting_walk">步行速度(米/秒)</string>
     <string name="setting_walk_default">1.2</string>
@@ -272,4 +271,13 @@
     <string name="route_started">已开始沿路线移动：%1$d 个点 · 全长 %2$s</string>
     <string name="route_default_name">地图路线（主界面选点）</string>
     <string name="route_point_title">第 %1$d 个点</string>
+
+    <!-- 点击移动：连续添加目标点 + 行进轨迹 -->
+    <string name="click_move_hint_empty">点击地图添加目标，可连续添加多个</string>
+    <string name="click_move_hint_count">已添加 %1$d 个目标 · 点地图继续添加</string>
+    <string name="click_move_point_title">目标 %1$d</string>
+    <string name="click_move_go">开始行走</string>
+    <string name="click_move_stop">停止行走</string>
+    <string name="click_move_empty">还没有添加目标点</string>
+    <string name="click_move_finished">已走完全部目标</string>
 </resources>

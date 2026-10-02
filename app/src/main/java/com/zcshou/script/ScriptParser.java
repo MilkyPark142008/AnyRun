@@ -490,12 +490,22 @@ public class ScriptParser {
             return 0;
         }
 
-        double lat1 = Math.toRadians(from.lat);
-        double lat2 = Math.toRadians(to.lat);
-        double dLng = Math.toRadians(to.lng - from.lng);
+        return bearing(from.lng, from.lat, to.lng, to.lat);
+    }
 
-        double y = Math.sin(dLng) * Math.cos(lat2);
-        double x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+    /**
+     * 计算从 (lng1, lat1) 到 (lng2, lat2) 的方位角（0 ~ 360，正北为 0）。
+     *
+     * <p>全工程只有这一份球面公式实现。ServiceGo 里注入朝向时也要算方位角，
+     * 以前它自己复了一份同样的 sin/cos，两处一旦只改一处就会算出不同的朝向。</p>
+     */
+    public static double bearing(double lng1, double lat1, double lng2, double lat2) {
+        double lat1r = Math.toRadians(lat1);
+        double lat2r = Math.toRadians(lat2);
+        double dLng = Math.toRadians(lng2 - lng1);
+
+        double y = Math.sin(dLng) * Math.cos(lat2r);
+        double x = Math.cos(lat1r) * Math.sin(lat2r) - Math.sin(lat1r) * Math.cos(lat2r) * Math.cos(dLng);
 
         double degree = Math.toDegrees(Math.atan2(y, x));
         return (degree + 360.0) % 360.0;

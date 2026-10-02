@@ -12,6 +12,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.graphics.DashPathEffect;
 import android.graphics.drawable.Drawable;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
@@ -195,6 +196,20 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     private final List<Marker> mRouteMarkers = new ArrayList<>();
     /** 地图点击派发器：始终保持在图层最上面，保证点地图不会被路线图钉 / 连线吃掉 */
     private MapEventsOverlay mMapEventsOverlay;
+    /*============================== 点击移动（多目标 + 行进轨迹） ==============================*/
+    /** 点击移动的目标点队列（WGS-84，与 ServiceGo / ScriptPlayer 的坐标语义一致） */
+    private final List<ScriptWaypoint> mClickMovePoints = new ArrayList<>();
+    /** 已经走到的目标点下标（下一个要下发的目标就是它） */
+    private int mClickMoveIndex = 0;
+    /** 从上一个目标到当前位置的连线（只有起点时才显示，形成完整的行进轨迹） */
+    private Polyline mClickMoveLine;
+    private final List<Marker> mClickMoveMarkers = new ArrayList<>();
+    /** 点击移动的操作条：撤回 / 清空 / 开始行走 */
+    private LinearLayout mClickMoveBar;
+    private TextView mClickMoveHint;
+    private Button mClickMoveGoButton;
+    /** 点击移动是否正在行进（由服务端到达回调驱动） */
+    private volatile boolean mClickMoveRunning;
     /*============================== 历史记录 相关 ==============================*/
     private SQLiteDatabase mLocationHistoryDB;
     private SQLiteDatabase mSearchHistoryDB;
@@ -235,6 +250,8 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         initGoBtn();
 
         initRoutePicking();
+
+        initClickMoveBar();
 
         initClickMoveSwitch();
 
@@ -278,6 +295,13 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 mServiceBinder = (ServiceGo.ServiceGoBinder)service;
                 // 脚本播放状态变化时刷新入口按钮（脚本播放可能在脚本模式页面里启动）
                 mServiceBinder.setScriptListener(mScriptListener);
+                // 点击移动“走到下一个目标”的回调：目标队列在主界面，服务端只管走
+                mServiceBinder.setClickMoveListener(new ServiceGo.ClickMoveListener() {
+                    @Override
+                    public void onClickTargetArrived(double lng, double lat) {
+                        onServiceClickArrived();
+                    }
+                });
                 syncStateWithService();
                 // 每次连上都把当前的“点击移动 ⇄ 摇杆移动”开关状态推给服务端
                 applyClickMoveMode();
@@ -299,6 +323,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 // 否则之后的“停止 / 开始”全都打在一个死对象上，表现为点了没反应
                 mServiceBinder = null;
                 mBoundToService = false;
+                mClickMoveRunning = false;
                 updateScriptButton();
             }
         };
@@ -1206,6 +1231,8 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         ensureMyLocationEnabled();
         // 模拟位置（脚本）的启停决定左下角开关的显隐
         refreshClickMoveSwitch();
+        // 点击移动的“开始行走 / 停止行走”跟着运行状态刷新
+        updateClickMoveUi();
 
         if (mButtonScript != null) {
             boolean running = mRunningScriptId != null;
@@ -1394,6 +1421,9 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             mButtonRoute.setImageResource(picking ? R.drawable.ic_close : R.drawable.ic_route);
         }
 
+        // 选点模式与点击移动的目标点操作条互斥：两条操作条都贴顶部，同时显示会叠在一起
+        refreshClickMoveSwitch();
+
         GoUtils.DisplayToast(this, getResources().getString(
                 picking ? R.string.route_mode_on : R.string.route_mode_off));
         updateRouteUi();
@@ -1428,38 +1458,58 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         redrawRoute();
     }
 
-    /** 重画路线：连线 + 每个路点一个图钉 */
-    private void redrawRoute() {
+    /**
+     * 画一组“路点图钉 + 连线”的公共实现。
+     *
+     * <p>路线选点和点击移动的画法完全一样，只差数据源、图层对象、标题文案和
+     * 画完之后要刷新哪条操作条，所以这四样参数化，避免两份一模一样的循环
+     * 日后改了一处忘了另一处（例如以后要给已走过的点换图标）。</p>
+     *
+     * @param points    路点（WGS-84）
+     * @param markers   这组路点当前持有的图钉，会先全部摘掉再按 points 重建
+     * @param line      连线图层，可为 null（只画图钉）
+     * @param titleRes  图钉标题文案，形如“第 %1$d 个点”
+     * @param refresh   画完之后需要刷新的操作条
+     */
+    private void redrawPoints(List<ScriptWaypoint> points, List<Marker> markers,
+                              Polyline line, int titleRes, Runnable refresh) {
         if (mMapView == null) {
             return;
         }
 
-        for (Marker marker : mRouteMarkers) {
+        for (Marker marker : markers) {
             marker.closeInfoWindow();
             mMapView.getOverlays().remove(marker);
         }
-        mRouteMarkers.clear();
+        markers.clear();
 
-        List<GeoPoint> points = new ArrayList<>();
-        for (ScriptWaypoint point : mRoutePoints) {
+        List<GeoPoint> geoPoints = new ArrayList<>();
+        for (int i = 0; i < points.size(); i++) {
+            ScriptWaypoint point = points.get(i);
             GeoPoint geoPoint = new GeoPoint(point.lat, point.lng);
-            points.add(geoPoint);
+            geoPoints.add(geoPoint);
 
             Marker marker = createMarkMarker();
             if (marker != null) {
                 marker.setPosition(geoPoint);
-                marker.setTitle(getResources().getString(R.string.route_point_title, mRouteMarkers.size() + 1));
+                marker.setTitle(getResources().getString(titleRes, i + 1));
                 addRouteOverlay(marker);
-                mRouteMarkers.add(marker);
+                markers.add(marker);
             }
         }
 
-        if (mRouteLine != null) {
-            mRouteLine.setPoints(points);
+        if (line != null) {
+            line.setPoints(geoPoints);
         }
 
         mMapView.invalidate();
-        updateRouteUi();
+        refresh.run();
+    }
+
+    /** 重画路线：连线 + 每个路点一个图钉 */
+    private void redrawRoute() {
+        redrawPoints(mRoutePoints, mRouteMarkers, mRouteLine,
+                R.string.route_point_title, this::updateRouteUi);
     }
 
     /** 刷新操作条：已选点数 + 主按钮是“开始移动”还是“停止移动” */
@@ -1609,10 +1659,11 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
      * <p>“点开始不动”的兜底：不管 onStartCommand 有没有送到，只要服务连上了，
      * 最终一定会真正进入播放状态。启动失败（脚本数据异常等）给明确提示，不再静默。</p>
      *
-     * <p>唯一例外是“服务端确实正在播这条脚本”：这时重复启动会让播放器重新走一遍
-     * {@code findAnchor}，用当前模拟位置把轨迹重新锚定一次，位置会莫名跳一下。
-     * 真正需要重启的场景是“停止 → 摇杆 → 再开始”，那时服务端已经不是播放状态，
-     * 所以只按 {@code isScriptPlaying()} 判断即可，不会漏掉重启。</p>
+     * <p>唯一例外是“服务端已经在播同一条脚本”：这时重复启动会让播放器重新走一遍
+     * {@code findAnchor}，用当前模拟位置把轨迹重新锚定一次，位置会莫名跳一下，
+     * 这正是“切一次应用脚本就失灵”的来源。所以这里按“播放器双确认 + id 相同”跳过：
+     * 同一条真的在播就不重启（不会漏掉“停止 → 再开始”的重启，那时已经不在播），
+     * 换一条脚本则照常切过去，不会出现“换了脚本还在跑旧路线”。</p>
      */
     private void ensureScriptPlaying(String scriptId) {
         if (mServiceBinder == null || TextUtils.isEmpty(scriptId)) {
@@ -1620,10 +1671,17 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
 
         try {
-            // 已经在播就不要再启动：每次 startScript 都会走一遍 findAnchor，
-            // 用“当前模拟位置”重新对齐轨迹。切应用 / 切页面回来的兜底调用
-            // 如果盲目重启，位置会被重新锚定一次，表现为脚本“走着走着跳一下 / 失灵”
-            if (mServiceBinder.isScriptPlaying()) {
+            // 服务端“真的”在播同一条脚本时才跳过启动：重复 startScript 会让播放器
+            // 重新走一遍 findAnchor，用当前模拟位置把轨迹重新锚定一次，
+            // 表现就是切一次应用 / 切一次页面脚本就跳一下甚至失灵。
+            //
+            // 这里必须同时满足两个条件：
+            //   1) isScriptPlaying() —— 状态 + 播放器双确认。只看 getRunningScriptId()
+            //      会被“状态停在 PLAYING 但播放器早就停了”的残留骗到，误跳过启动；
+            //   2) id 相同 —— 换一条脚本必须立刻切过去，否则会一直跑旧路线。
+            boolean playingSame = mServiceBinder.isScriptPlaying()
+                    && scriptId.equals(mServiceBinder.getRunningScriptId());
+            if (playingSame) {
                 mRunningScriptId = scriptId;
                 return;
             }
@@ -1769,6 +1827,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         try {
             if (mServiceBinder != null) {
                 mServiceBinder.clearScriptListener();
+                mServiceBinder.clearClickMoveListener();
             }
             unbindService(mConnection);
         } catch (Exception e) {
@@ -1776,6 +1835,8 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         }
         mBoundToService = false;
         mServiceBinder = null;
+        // 解绑后收不到“到达 / 走完”回调，界面按“没在走”处理，避免按钮一直停在“停止行走”
+        mClickMoveRunning = false;
     }
 
     private void startGoLocation() {
@@ -1830,6 +1891,7 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 ? R.string.move_mode_click : R.string.move_mode_joystick);
         mClickMoveSwitch.setOnClickListener(v -> {
             mClickMoveEnabled = !mClickMoveEnabled;
+            // 内部会推给服务端并刷新“目标点操作条”（切到点击移动才显示，切回摇杆就收起）
             applyClickMoveMode();
             if (mServiceBinder == null) {
                 // 状态要推给服务端；连接回来时 onServiceConnected 还会再补推一次，
@@ -1855,6 +1917,10 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                 XLog.e("ERROR: setClickMoveMode", e);
             }
         }
+
+        // 开关状态决定“目标点操作条”是否出现（切到点击移动才显示，切回摇杆就收起）
+        refreshClickMoveSwitch();
+        updateClickMoveUi();
     }
 
     /** 开关只在模拟位置（单点 / 脚本）运行期间显示，结束后消失 */
@@ -1866,10 +1932,70 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         // 服务连着 = 还在注入位置（脚本跑完后位置冻结但服务仍在），点击移动仍可用
         boolean running = isMockServStart || mRunningScriptId != null || mServiceBinder != null;
         mClickMoveSwitch.setVisibility(running ? View.VISIBLE : View.GONE);
+
+        // 点击移动开启时显示目标点操作条（撤回 / 清空 / 开始行走），与路线选点一致
+        if (mClickMoveBar != null) {
+            boolean showBar = running && mClickMoveEnabled && !mRoutePicking;
+            mClickMoveBar.setVisibility(showBar ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    /** 初始化点击移动的目标点操作条（点击地图连续添加目标时的撤回 / 清空 / 开始行走） */
+    private void initClickMoveBar() {
+        mClickMoveBar = findViewById(R.id.click_move_bar);
+        mClickMoveHint = findViewById(R.id.click_move_hint);
+        mClickMoveGoButton = findViewById(R.id.click_move_go);
+
+        View undo = findViewById(R.id.click_move_undo);
+        if (undo != null) {
+            undo.setOnClickListener(v -> undoClickMovePoint());
+        }
+        View clear = findViewById(R.id.click_move_clear);
+        if (clear != null) {
+            clear.setOnClickListener(v -> clearClickMovePoints());
+        }
+        if (mClickMoveGoButton != null) {
+            mClickMoveGoButton.setOnClickListener(v -> {
+                if (mClickMoveRunning) {
+                    // 停止行走：取消还没走到的目标（保留已走轨迹），按钮变回“开始行走”
+                    mClickMoveRunning = false;
+                    if (mServiceBinder != null) {
+                        try {
+                            mServiceBinder.clearClickTargets();
+                        } catch (Exception e) {
+                            XLog.e("ERROR: clearClickTargets", e);
+                        }
+                    }
+                    updateClickMoveUi();
+                    GoUtils.DisplayToast(this, getResources().getString(R.string.click_move_stop));
+                } else if (mClickMovePoints.isEmpty()) {
+                    GoUtils.DisplayToast(this, getResources().getString(R.string.click_move_empty));
+                } else {
+                    // 重新开始行走：从第一个还没走到的目标接着走
+                    dispatchNextClickTarget();
+                }
+            });
+        }
+
+        // 轨迹连线图层：与脚本路线的连线画法一致（虚线区分“点击移动的临时目标”），
+        // 两条线各自持有图层对象，避免互相覆盖
+        if (mMapView != null) {
+            mClickMoveLine = new Polyline(mMapView);
+            mClickMoveLine.getOutlinePaint().setColor(ContextCompat.getColor(this, R.color.colorAccent));
+            mClickMoveLine.getOutlinePaint().setStrokeWidth(6.0f);
+            mClickMoveLine.getOutlinePaint().setPathEffect(
+                    new DashPathEffect(new float[] {18.0f, 12.0f}, 0.0f));
+            addRouteOverlay(mClickMoveLine);
+        }
+
+        updateClickMoveUi();
     }
 
     /**
      * 主界面地图单击的“点击移动”处理。
+     *
+     * <p>每点一次追加一个目标点：地图上立刻出现图钉与连线，
+     * 服务端按队列逐个走过去（走完一个自动接下一个）。</p>
      *
      * @return true 表示本次点击已按点击移动处理（不再走原来的选中标记逻辑）
      */
@@ -1891,14 +2017,155 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
             return true;
         }
 
+        // 点地图 = 往目标队列末尾追加一个点；还没开始走时，第一个点会立刻开走
+        addClickMovePoint(p.getLongitude(), p.getLatitude());
+        return true;
+    }
+
+    /*============================== 点击移动：目标队列 / 轨迹 ==============================*/
+
+    /** 追加一个点击移动目标点，并在地图上画出图钉与连线 */
+    private void addClickMovePoint(double lngWgs84, double latWgs84) {
+        mClickMovePoints.add(new ScriptWaypoint(lngWgs84, latWgs84, getSettingAltitude(),
+                mRouteMode, getModeSpeed(mRouteMode), 0));
+        redrawClickMove();
+
+        // 还没开始走：立刻把队首目标下发，服务端随即起步
+        if (!mClickMoveRunning) {
+            dispatchNextClickTarget();
+        }
+    }
+
+    /**
+     * 把“下一个还没走到的目标”下发给服务端。
+     *
+     * <p>{@link #mClickMoveIndex} 就是下一个待下发的目标下标（每到达一个由
+     * {@link #onServiceClickArrived} 推进），所以这里直接取它，不再需要额外的
+     * “已到达”标记。服务端到达后会回调，那时再把下一个发下去。
+     * 这样即使用户在行走途中继续点地图，也只是往队列尾部追加，不会打断当前这一段。</p>
+     */
+    private void dispatchNextClickTarget() {
+        if (mServiceBinder == null) {
+            return;
+        }
+
+        if (mClickMoveIndex >= mClickMovePoints.size()) {
+            // 没有下一个目标了：行进结束
+            mClickMoveRunning = false;
+            updateClickMoveUi();
+            return;
+        }
+
+        ScriptWaypoint target = mClickMovePoints.get(mClickMoveIndex);
         try {
-            if (!mServiceBinder.setClickTarget(p.getLongitude(), p.getLatitude())) {
-                GoUtils.DisplayToast(this, getResources().getString(R.string.app_error_service));
+            if (mServiceBinder.appendClickTarget(target.lng, target.lat)) {
+                mClickMoveRunning = true;
+            } else {
+                // 服务端拒绝（脚本抢走了位置或开关没开）：不要卡在“假运行”状态
+                mClickMoveRunning = false;
             }
         } catch (Exception e) {
-            XLog.e("ERROR: setClickTarget", e);
+            XLog.e("ERROR: appendClickTarget", e);
+            mClickMoveRunning = false;
         }
-        return true;
+
+        updateClickMoveUi();
+    }
+
+    /** 服务端到达一个目标：推进下标，接着下发下一个（没有就收工） */
+    private void onServiceClickArrived() {
+        runOnUiThread(() -> {
+            if (mClickMoveIndex < mClickMovePoints.size()) {
+                mClickMoveIndex++;
+            }
+
+            if (mClickMoveIndex >= mClickMovePoints.size()) {
+                mClickMoveRunning = false;
+                redrawClickMove();
+                updateClickMoveUi();
+                GoUtils.DisplayToast(MainActivity.this,
+                        getResources().getString(R.string.click_move_finished));
+                return;
+            }
+
+            dispatchNextClickTarget();
+        });
+    }
+
+    /** 撤回最后一个还没走到的目标点（已经走过的点不回退，避免位置倒着走） */
+    private void undoClickMovePoint() {
+        if (mClickMovePoints.isEmpty()) {
+            GoUtils.DisplayToast(this, getResources().getString(R.string.click_move_empty));
+            return;
+        }
+
+        if (mClickMovePoints.size() <= mClickMoveIndex) {
+            // 所有点都走完了，撤回等同于清空
+            clearClickMovePoints();
+            return;
+        }
+
+        mClickMovePoints.remove(mClickMovePoints.size() - 1);
+
+        // 删掉的正好是“服务端正在走向”的那个目标：把服务端的目标一并撤掉，
+        // 否则位置会继续朝着一个已经不存在的点走
+        if (mClickMoveIndex >= mClickMovePoints.size() && mClickMoveRunning) {
+            mClickMoveRunning = false;
+            if (mServiceBinder != null) {
+                try {
+                    mServiceBinder.clearClickTargets();
+                } catch (Exception e) {
+                    XLog.e("ERROR: clearClickTargets", e);
+                }
+            }
+        }
+
+        redrawClickMove();
+        updateClickMoveUi();
+    }
+
+    /** 清空目标点与轨迹（正在走的目标也一并取消） */
+    private void clearClickMovePoints() {
+        mClickMovePoints.clear();
+        mClickMoveIndex = 0;
+        mClickMoveRunning = false;
+
+        if (mServiceBinder != null) {
+            try {
+                mServiceBinder.clearClickTargets();
+            } catch (Exception e) {
+                XLog.e("ERROR: clearClickTargets", e);
+            }
+        }
+
+        redrawClickMove();
+        updateClickMoveUi();
+    }
+
+    /** 重画点击移动的图钉与连线（虚线，和脚本路线的实线区分开） */
+    private void redrawClickMove() {
+        redrawPoints(mClickMovePoints, mClickMoveMarkers, mClickMoveLine,
+                R.string.click_move_point_title, this::updateClickMoveUi);
+    }
+
+    /**
+     * 刷新点击移动相关的按钮与提示文案。
+     *
+     * <p>点击移动模式下点地图连续添加目标，这条操作条负责撤回 / 清空 / 开始行走，
+     * 与脚本路线的选点操作方式保持一致。</p>
+     */
+    private void updateClickMoveUi() {
+        if (mClickMoveHint != null) {
+            int count = mClickMovePoints.size();
+            mClickMoveHint.setText(count == 0
+                    ? getResources().getString(R.string.click_move_hint_empty)
+                    : getResources().getString(R.string.click_move_hint_count, count));
+        }
+
+        if (mClickMoveGoButton != null) {
+            mClickMoveGoButton.setText(mClickMoveRunning
+                    ? R.string.click_move_stop : R.string.click_move_go);
+        }
     }
 
     private void doGoLocation(View v) {
