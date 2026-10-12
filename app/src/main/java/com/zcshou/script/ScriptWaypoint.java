@@ -1,10 +1,10 @@
-package com.zcshou.script;
+package com.anyrun.script;
 
 /**
  * 脚本路点：一个“带移动状态的位置”。
  *
- * <p>坐标统一保存为服务层使用的 WGS-84（与 {@link com.zcshou.service.ServiceGo} 一致），
- * 界面上需要时再通过 {@link com.zcshou.utils.MapUtils} 转换成 BD-09 展示。</p>
+ * <p>坐标统一保存为服务层使用的 WGS-84（与 {@link com.anyrun.service.ServiceGo} 一致），
+ * 界面上需要时再通过 {@link com.anyrun.utils.MapUtils} 转换成 BD-09 展示。</p>
  */
 public class ScriptWaypoint {
     /** 移动状态：步行 / 跑步 / 骑行 */

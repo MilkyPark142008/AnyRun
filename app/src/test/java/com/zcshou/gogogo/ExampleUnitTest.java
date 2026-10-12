@@ -1,4 +1,4 @@
-package com.zcshou.gogogo;
+package com.anyrun.app;
 
 import org.junit.Test;
 

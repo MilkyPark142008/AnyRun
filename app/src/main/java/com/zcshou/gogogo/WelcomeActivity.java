@@ -1,4 +1,4 @@
-package com.zcshou.gogogo;
+package com.anyrun.app;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
@@ -27,7 +27,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.preference.PreferenceManager;
 
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
-import com.zcshou.utils.GoUtils;
+import com.anyrun.utils.GoUtils;
 
 import java.util.ArrayList;
 

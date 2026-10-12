@@ -14,7 +14,7 @@
 </div>
 
 <div align="center">
-影梭 - 用于 Android 8.0+ 的无需 ROOT 权限的虚拟定位 APP
+AnyRun - 用于 Android 8.0+ 的无需 ROOT 权限的虚拟定位 APP
 </div>
 
 ## 特别鸣谢ZCShou
@@ -22,11 +22,11 @@
 ## 警告 有任何问题请直接提交issue 或是删除 或是修改 禁止商用行为
 
 ## 简介
-&emsp;&emsp;影梭是一个基于 Android 调试 API实现的安卓定位修改工具，并且同时实现了一个可以自由控制移动的摇杆。使用影梭，不需要 ROOT 权限就可以随意修改自己的当前位置以及模拟移动。
+&emsp;&emsp;AnyRun是一个基于 Android 调试 API实现的安卓定位修改工具，并且同时实现了一个可以自由控制移动的摇杆。使用AnyRun，不需要 ROOT 权限就可以随意修改自己的当前位置以及模拟移动。
 
 
 ## 个人Fork原因及背景
-&emsp;&emsp;将影梭用在校园运动跑步类app（步道乐跑 为本人学校使用）
+&emsp;&emsp;将AnyRun用在校园运动跑步类app（步道乐跑 为本人学校使用）
 
 &emsp;&emsp;原本的那个没有脚本 用起来好累 我就自己借用工具进行了修改
 
@@ -58,13 +58,13 @@ walk 116.410 39.910 1.2 10   # 到达后原地停留 10 秒
 
 ## 用法
 1. 下载 APK 直接安装
-2. 启动影梭，赋予相关权限
+2. 启动AnyRun，赋予相关权限
 3. 单击地图位置，然后点击启动按钮
 
 
 
 ## 参考
-&emsp;&emsp;由于本人也是个新手，纯属业余瞎搞，因此，在写影梭的过程中，参考了很多网友分享的技术文章、示例代码等。包括但不限于以下列出的几个：
+&emsp;&emsp;由于本人也是个新手，纯属业余瞎搞，因此，在写AnyRun的过程中，参考了很多网友分享的技术文章、示例代码等。包括但不限于以下列出的几个：
 1. https://github.com/Hilaver/MockGPS
 2. https://github.com/bxxfighting/together-go
 3. https://github.com/P72B/Mocklation
@@ -91,7 +91,7 @@ A：Gradle 使用的 java 版本与 Android Studio 使用的不一致。Gradle �
 
 ## 如何贡献
 1. FORK -> PR
-2. 加入影梭开发，共同完善
+2. 加入AnyRun开发，共同完善
 
 ## 许可证
 GPL-3.0-only © ZCShou

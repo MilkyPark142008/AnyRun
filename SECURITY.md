@@ -13,11 +13,11 @@ If you are using an old unsupported version, please update to an new supported v
 
 ## 报告漏洞 / Reporting a Vulnerability
 
-团队和社区非常重视影梭中的安全问题。感谢您为负责任地披露您的发现所做的努力。
+团队和社区非常重视AnyRun中的安全问题。感谢您为负责任地披露您的发现所做的努力。
 
 The team and community take security issues in GoGoGo seriously. We appreciate your efforts to responsibly disclose your findings. 
 
-如果您发现了任何安全漏洞，请给 zcsexp@gmail.com 发送邮件。邮件标题为 `[SECURITY][影梭] xxxxx`, 内容格式如下所示：
+如果您发现了任何安全漏洞，请给 zcsexp@gmail.com 发送邮件。邮件标题为 `[SECURITY][AnyRun] xxxxx`, 内容格式如下所示：
 
 To report a security issue, email to zcsexp@gmail.com. The mail title should be `[SECURITY][GoGoGo] xxxxx` and content are as below:
 ```
@@ -30,10 +30,10 @@ To report a security issue, email to zcsexp@gmail.com. The mail title should be 
 
 ### 版本信息 / Version Info
 
-- 影梭版本 / GoGoGo Version : 
+- AnyRun版本 / GoGoGo Version : 
 - 系统版本 / OS Version : 
 
-<!-- 请在上方描述出问题的影梭版本及使用的系统版本，然后删除该注释。 -->
+<!-- 请在上方描述出问题的AnyRun版本及使用的系统版本，然后删除该注释。 -->
 <!-- Please describe version of GoGoGo and used OS above, then delete this comment. -->
 
 ### 复现步骤 / Steps to Reproduce

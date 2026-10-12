@@ -1,4 +1,4 @@
-package com.zcshou.gogogo;
+package com.anyrun.app;
 
 import android.content.SharedPreferences;
 import android.graphics.drawable.Drawable;
@@ -38,14 +38,14 @@ import org.osmdroid.views.overlay.MapEventsOverlay;
 import org.osmdroid.views.overlay.Marker;
 import org.osmdroid.views.overlay.Polyline;
 
-import com.zcshou.script.ScriptParser;
-import com.zcshou.script.ScriptRoute;
-import com.zcshou.script.ScriptStore;
-import com.zcshou.script.ScriptTextEditor;
-import com.zcshou.script.ScriptWaypoint;
-import com.zcshou.utils.GoUtils;
-import com.zcshou.utils.MapUtils;
-import com.zcshou.utils.TileSourceUtils;
+import com.anyrun.script.ScriptParser;
+import com.anyrun.script.ScriptRoute;
+import com.anyrun.script.ScriptStore;
+import com.anyrun.script.ScriptTextEditor;
+import com.anyrun.script.ScriptWaypoint;
+import com.anyrun.utils.GoUtils;
+import com.anyrun.utils.MapUtils;
+import com.anyrun.utils.TileSourceUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -1027,7 +1027,7 @@ public class ScriptEditActivity extends BaseActivity {
         }
 
         // 与 ServiceGo 的默认位置保持一致
-        return new GeoPoint(com.zcshou.service.ServiceGo.DEFAULT_LAT, com.zcshou.service.ServiceGo.DEFAULT_LNG);
+        return new GeoPoint(com.anyrun.service.ServiceGo.DEFAULT_LAT, com.anyrun.service.ServiceGo.DEFAULT_LNG);
     }
 
     /*============================== 参数读取 ==============================*/

@@ -1,4 +1,4 @@
-package com.zcshou.utils;
+package com.anyrun.utils;
 
 import android.content.Context;
 import android.content.Intent;

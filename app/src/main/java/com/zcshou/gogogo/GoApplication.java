@@ -1,4 +1,4 @@
-package com.zcshou.gogogo;
+package com.anyrun.app;
 
 import android.app.Application;
 import android.os.Build;
@@ -16,7 +16,7 @@ import com.elvishew.xlog.printer.file.FilePrinter;
 import com.elvishew.xlog.printer.file.backup.NeverBackupStrategy;
 import com.elvishew.xlog.printer.file.clean.FileLastModifiedCleanStrategy;
 import com.elvishew.xlog.printer.file.naming.ChangelessFileNameGenerator;
-import com.zcshou.utils.GoUtils;
+import com.anyrun.utils.GoUtils;
 
 import org.osmdroid.config.Configuration;
 import org.osmdroid.config.IConfigurationProvider;
@@ -28,7 +28,7 @@ import java.util.Date;
 import java.util.Locale;
 
 public class GoApplication extends Application {
-    public static final String APP_NAME = "GoGoGo";
+    public static final String APP_NAME = "AnyRun";
     public static final String LOG_FILE_NAME = APP_NAME + ".log";
     /** 崩溃日志单独再存一份，避免 xlog 的缓冲导致崩溃信息丢失 */
     public static final String CRASH_FILE_NAME = APP_NAME + ".crash.log";
@@ -88,7 +88,7 @@ public class GoApplication extends Application {
         builder.append(Log.getStackTraceString(throwable));
         builder.append("===============================================\n");
 
-        // 1) 交给 xlog：保证“问题反馈”里分享的 GoGoGo.log 也包含崩溃信息
+        // 1) 交给 xlog：保证“问题反馈”里分享的 AnyRun.log 也包含崩溃信息
         try {
             XLog.e("CRASH: uncaught exception", throwable);
         } catch (Throwable ignored) {

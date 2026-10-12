@@ -1,4 +1,4 @@
-package com.zcshou.gogogo;
+package com.anyrun.app;
 
 import android.content.ComponentName;
 import android.content.Context;
@@ -31,13 +31,13 @@ import androidx.core.content.ContextCompat;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
-import com.zcshou.script.ScriptParser;
-import com.zcshou.script.ScriptRoute;
-import com.zcshou.script.ScriptStore;
-import com.zcshou.script.ScriptWaypoint;
-import com.zcshou.service.ServiceGo;
-import com.zcshou.utils.GoUtils;
-import com.zcshou.utils.ShareUtils;
+import com.anyrun.script.ScriptParser;
+import com.anyrun.script.ScriptRoute;
+import com.anyrun.script.ScriptStore;
+import com.anyrun.script.ScriptWaypoint;
+import com.anyrun.service.ServiceGo;
+import com.anyrun.utils.GoUtils;
+import com.anyrun.utils.ShareUtils;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -467,7 +467,7 @@ public class ScriptActivity extends BaseActivity {
             if (!dir.exists() && !dir.mkdirs()) {
                 throw new IOException("cannot create dir");
             }
-            File file = new File(dir, "gogogo_scripts.json");
+            File file = new File(dir, "anyrun_scripts.json");
             try (FileOutputStream out = new FileOutputStream(file)) {
                 out.write(mStore.exportJson().getBytes(StandardCharsets.UTF_8));
             }

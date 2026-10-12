@@ -1,4 +1,4 @@
-package com.zcshou.utils;
+package com.anyrun.utils;
 
 import android.annotation.SuppressLint;
 import android.content.Context;

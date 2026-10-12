@@ -1,4 +1,4 @@
-package com.zcshou.utils;
+package com.anyrun.utils;
 
 import android.os.Handler;
 import android.os.Looper;
@@ -38,7 +38,7 @@ public class OsmGeocoder {
     private static final String SEARCH_URL = "https://nominatim.openstreetmap.org/search";
     private static final String REVERSE_URL = "https://nominatim.openstreetmap.org/reverse";
     /* Nominatim 的使用条款要求带上可识别的 User-Agent，否则会直接返回 403 */
-    private static final String USER_AGENT = "GoGoGo-Android/1.12.3 (mock location tool)";
+    private static final String USER_AGENT = "AnyRun-Android/1.12.3 (mock location tool)";
 
     private final OkHttpClient mHttpClient;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());

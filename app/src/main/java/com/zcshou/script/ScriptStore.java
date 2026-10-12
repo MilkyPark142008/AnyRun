@@ -1,4 +1,4 @@
-package com.zcshou.script;
+package com.anyrun.script;
 
 import android.content.Context;
 import android.content.SharedPreferences;

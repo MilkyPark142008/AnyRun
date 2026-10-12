@@ -1,4 +1,4 @@
-package com.zcshou.script;
+package com.anyrun.script;
 
 import java.util.Locale;
 import java.util.regex.Matcher;

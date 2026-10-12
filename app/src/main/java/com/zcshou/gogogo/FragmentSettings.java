@@ -1,4 +1,4 @@
-package com.zcshou.gogogo;
+package com.anyrun.app;
 
 import android.os.Bundle;
 import android.text.InputType;
@@ -10,7 +10,7 @@ import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.SwitchPreferenceCompat;
 
 import com.elvishew.xlog.XLog;
-import com.zcshou.utils.GoUtils;
+import com.anyrun.utils.GoUtils;
 
 import java.util.Objects;
 

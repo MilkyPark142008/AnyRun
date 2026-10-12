@@ -1,4 +1,4 @@
-package com.zcshou.gogogo;
+package com.anyrun.app;
 
 import android.Manifest;
 import android.content.ClipData;
@@ -77,19 +77,19 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import com.zcshou.service.ServiceGo;
-import com.zcshou.database.DataBaseHistoryLocation;
-import com.zcshou.database.DataBaseHistorySearch;
-import com.zcshou.script.ScriptParser;
-import com.zcshou.script.ScriptPlayer;
-import com.zcshou.script.ScriptRoute;
-import com.zcshou.script.ScriptStore;
-import com.zcshou.script.ScriptWaypoint;
-import com.zcshou.utils.ShareUtils;
-import com.zcshou.utils.GoUtils;
-import com.zcshou.utils.MapUtils;
-import com.zcshou.utils.OsmGeocoder;
-import com.zcshou.utils.TileSourceUtils;
+import com.anyrun.service.ServiceGo;
+import com.anyrun.database.DataBaseHistoryLocation;
+import com.anyrun.database.DataBaseHistorySearch;
+import com.anyrun.script.ScriptParser;
+import com.anyrun.script.ScriptPlayer;
+import com.anyrun.script.ScriptRoute;
+import com.anyrun.script.ScriptStore;
+import com.anyrun.script.ScriptWaypoint;
+import com.anyrun.utils.ShareUtils;
+import com.anyrun.utils.GoUtils;
+import com.anyrun.utils.MapUtils;
+import com.anyrun.utils.OsmGeocoder;
+import com.anyrun.utils.TileSourceUtils;
 
 import com.elvishew.xlog.XLog;
 
@@ -1230,14 +1230,14 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
     /** 脚本播放状态回调（可能在定位线程触发，刷新界面要切回主线程） */
     private final ServiceGo.ScriptListener mScriptListener = new ServiceGo.ScriptListener() {
         @Override
-        public void onScriptSegment(com.zcshou.script.ScriptRoute route, int index,
-                                    com.zcshou.script.ScriptWaypoint.Mode mode, double speed) {
+        public void onScriptSegment(com.anyrun.script.ScriptRoute route, int index,
+                                    com.anyrun.script.ScriptWaypoint.Mode mode, double speed) {
             mRunningScriptId = route == null ? null : route.id;
             runOnUiThread(MainActivity.this::updateScriptButton);
         }
 
         @Override
-        public void onScriptFinish(com.zcshou.script.ScriptRoute route) {
+        public void onScriptFinish(com.anyrun.script.ScriptRoute route) {
             // 跑完 = 结束：本地也按“没在播”处理，路线条直接回到“开始移动”、
             // 传送/点击移动不再被“播放中”拦截，模拟位置可以立刻继续
             mRunningScriptId = null;

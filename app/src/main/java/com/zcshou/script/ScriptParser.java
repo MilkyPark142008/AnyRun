@@ -1,6 +1,6 @@
-package com.zcshou.script;
+package com.anyrun.script;
 
-import com.zcshou.utils.MapUtils;
+import com.anyrun.utils.MapUtils;
 
 import java.util.ArrayList;
 import java.util.List;

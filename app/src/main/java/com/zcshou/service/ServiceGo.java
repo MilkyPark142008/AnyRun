@@ -1,4 +1,4 @@
-package com.zcshou.service;
+package com.anyrun.service;
 
 import android.annotation.SuppressLint;
 import android.app.Notification;
@@ -30,15 +30,15 @@ import androidx.core.app.NotificationCompat;
 import androidx.preference.PreferenceManager;
 
 import com.elvishew.xlog.XLog;
-import com.zcshou.gogogo.MainActivity;
-import com.zcshou.gogogo.R;
-import com.zcshou.joystick.JoyStick;
-import com.zcshou.script.ScriptParser;
-import com.zcshou.script.ScriptPlayer;
-import com.zcshou.script.ScriptRoute;
-import com.zcshou.script.ScriptStore;
-import com.zcshou.script.ScriptWaypoint;
-import com.zcshou.utils.GoUtils;
+import com.anyrun.app.MainActivity;
+import com.anyrun.app.R;
+import com.anyrun.joystick.JoyStick;
+import com.anyrun.script.ScriptParser;
+import com.anyrun.script.ScriptPlayer;
+import com.anyrun.script.ScriptRoute;
+import com.anyrun.script.ScriptStore;
+import com.anyrun.script.ScriptWaypoint;
+import com.anyrun.utils.GoUtils;
 
 public class ServiceGo extends Service {
     // 定位相关变量

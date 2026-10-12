@@ -1,11 +1,11 @@
-package com.zcshou.script;
+package com.anyrun.script;
 
 import java.util.List;
 
 /**
  * 脚本播放引擎：按时间推进，在路点之间做经纬度插值。
  *
- * <p>播放本身不关心线程，由 {@link com.zcshou.service.ServiceGo} 的定位线程周期性调用
+ * <p>播放本身不关心线程，由 {@link com.anyrun.service.ServiceGo} 的定位线程周期性调用
  * {@link #onTick()} 推进即可。每个 {@link ScriptWaypoint} 自带移动状态（走 / 跑 / 骑）和速度，
  * 因此“同一段脚本里既能走路又能骑车”是靠分段速度实现的：切线方向不变，速度随当前段的状态变化。</p>
  *

@@ -1,4 +1,4 @@
-package com.zcshou.joystick;
+package com.anyrun.joystick;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
@@ -32,14 +32,14 @@ import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.MapEventsOverlay;
 import org.osmdroid.views.overlay.Marker;
 
-import com.zcshou.database.DataBaseHistoryLocation;
-import com.zcshou.gogogo.HistoryActivity;
-import com.zcshou.gogogo.MainActivity;
-import com.zcshou.gogogo.R;
-import com.zcshou.utils.GoUtils;
-import com.zcshou.utils.MapUtils;
-import com.zcshou.utils.OsmGeocoder;
-import com.zcshou.utils.TileSourceUtils;
+import com.anyrun.database.DataBaseHistoryLocation;
+import com.anyrun.app.HistoryActivity;
+import com.anyrun.app.MainActivity;
+import com.anyrun.app.R;
+import com.anyrun.utils.GoUtils;
+import com.anyrun.utils.MapUtils;
+import com.anyrun.utils.OsmGeocoder;
+import com.anyrun.utils.TileSourceUtils;
 
 import okhttp3.OkHttpClient;
 
