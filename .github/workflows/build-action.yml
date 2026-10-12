@@ -8,11 +8,11 @@ on:
   # 仓库收到 Push 时触发
   push:
     branches:
-      - master
+      - main
   # 仓库收到 pull_request 时触发
   pull_request:
     branches:
-      - master
+      - main
 
 # 一个 workflow 执行一个或多个 job，这些 job 被组织在 jobs 字段下
 jobs:
