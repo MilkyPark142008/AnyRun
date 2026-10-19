@@ -343,10 +343,10 @@ public class ServiceGo extends Service {
                 .setContentIntent(clickPI)
                 .addAction(new NotificationCompat.Action(R.drawable.ic_position, getResources().getString(R.string.note_show), showPendingPI))
                 .addAction(new NotificationCompat.Action(R.drawable.ic_fly, getResources().getString(R.string.note_hide), hidePendingPI))
-                // 通知小图标不能再用 R.mipmap.ic_launcher：自适应图标在通知栏只取前景层，
-                // 而新图标的前景是透明的（整张图在背景层），会显示成空白。
+                // 通知小图标必须是纯白剪影：自适应图标（mipmap/ic_launcher）在通知栏
+                // 只会取前景层，而彩色图标会被系统渲染成灰块或空白。
                 // 这里直接用图钉矢量，和原版通知图标的轮廓保持一致。
-                .setSmallIcon(R.drawable.ic_launcher_foreground);
+                .setSmallIcon(R.drawable.ic_position);
 
         if (scriptActive) {
             // 同一个按钮按状态切换动作与图标：播放中 = 暂停，暂停中 = 继续
